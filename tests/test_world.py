@@ -195,3 +195,17 @@ def test_initialization_refuses_existing_history(store):
     with pytest.raises(ValueError, match="already exists"):
         initialize(store, Laws(founders=2))
     assert store.snapshot() == before
+
+
+def test_replay_distinguishes_omitted_identity_fields_from_explicit_clear(store, actors):
+    actor = actors[0]
+    act(store, actor, "update_identity", description="An existing self-description")
+    original = dict(kind="update_identity", name="Chosen name")
+    execute(store, actor, original, "identity-call")
+    assert store.snapshot()["residents"][actor]["description"] == "An existing self-description"
+    with pytest.raises(ValueError, match="different arguments"):
+        execute(store, actor, dict(original, description=None), "identity-call")
+    act(store, actor, "update_identity", description=None)
+    assert store.snapshot()["residents"][actor]["description"] == ""
+    with pytest.raises(ValueError, match="No identity change"):
+        act(store, actor, "update_identity")

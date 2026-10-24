@@ -63,3 +63,18 @@ Real provider token counting and output limits require integration-specific veri
 
 Repository publication checks (history scan, clean checkout and remote CI) are recorded
 in the delivery result after the source commit; they are not implied by unit tests.
+
+## Repository delivery checks
+
+- Fresh local Git clone of the starter: `uv sync --frozen` succeeded without old project files.
+- From that checkout: migrate, init-demo, resume, five-second run, pause and status all passed;
+  two residents, ten saved mock requests, zero errors, peak concurrency two.
+- Five interface/restart tests from the clean checkout passed (13.61 seconds).
+- Final partial-identity replay adjustment: two focused regression tests passed (7.37 seconds).
+  Omitted fields and explicit null clearing are now distinct in the idempotency fingerprint.
+- Gitleaks 8.30.1 scanned the staged source and initial full Git history: no leaks found.
+- Lockfile package sources use public PyPI, not an environment-private package index.
+- Existing private GENESIS checkout remained clean; its stopped owner was not restarted.
+
+GitHub Actions is configured to repeat Ruff and all 28 current tests with a disposable
+PostgreSQL service. Its actual run result must be checked separately from local evidence.

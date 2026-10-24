@@ -346,7 +346,7 @@ def apply(state, actor, action):
 
 def execute(store, actor, action, effect_key):
     action = ACTION.validate_python(action)
-    fingerprint = hashlib.sha256(action.model_dump_json().encode()).hexdigest()
+    fingerprint = hashlib.sha256(action.model_dump_json(exclude_unset=True).encode()).hexdigest()
     key = actor + ":" + effect_key
     with store.transaction() as (_, state):
         if key in state["effects"]:
