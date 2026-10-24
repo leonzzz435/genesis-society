@@ -95,7 +95,7 @@ and thread subscriptions are not implemented. New messages batch at model bounda
 Azure: ChatOpenAI using the v1 endpoint and an installation-specific deployment;
 Entra credential/token provider or an explicitly configured key. SDK max_retries=0,
 bounded timeout and output. AzureConfig only builds non-secret options; it opens no client.
-Actual Azure authentication and compatibility belong to Cursor's first integration task.
+Actual Azure authentication and compatibility belong to the first integration milestone.
 Reference: https://docs.langchain.com/oss/python/integrations/chat/azure_chat_openai
 
 Slack: official AsyncApp + AsyncSocketModeHandler, four independent bot/app credentials,
@@ -119,7 +119,7 @@ Creator may inspect exact lifespans, private conversations and memories. These e
 are not resident tools. Public HTTP health reports HTTP liveness only; authenticated health
 uses heartbeat, actual tick progress and isolated errors. The token must not appear in URLs.
 
-## Non-goals for this handoff
+## Current non-goals
 
 No public deployment, company data, paid inference, multi-worker cluster, generic plugin
 framework, vector store, Telegram migration, production reset, scripted social institutions,

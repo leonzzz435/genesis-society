@@ -1,7 +1,7 @@
 # Engineering instructions — GENESIS Society
 
-Read `docs/ARCHITECTURE.md`, `PLAN.md` and `docs/CURSOR_HANDOFF.md` before changing behavior.
-This is a NEW offline starter, not a production successor already deployed.
+Read `docs/ARCHITECTURE.md`, `PLAN.md` and `docs/DEVELOPMENT.md` before changing behavior.
+This is an offline research starter, not a production deployment.
 
 ## Purpose
 Persistent autonomous digital residents with identity, memory, private conversations,
@@ -29,7 +29,7 @@ Tests create and drop ONLY fresh `society_test_*` databases. Never point tests a
 living world. Set `SOCIETY_TEST_ADMIN_URL` to an isolated PostgreSQL server with CREATEDB.
 Mock narrative is scripted infrastructure evidence, never proof of emergent behavior.
 
-## Handoff discipline
+## Delivery discipline
 Keep PLAN status honest. Complete one bounded task at a time with focused tests.
 Document behavior, remaining limits and exact verification. No enormous speculative
 architecture pass. Do not enable Azure, Slack, GitHub, Notion or paid execution just

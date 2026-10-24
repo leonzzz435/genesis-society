@@ -76,5 +76,7 @@ in the delivery result after the source commit; they are not implied by unit tes
 - Lockfile package sources use public PyPI, not an environment-private package index.
 - Existing private GENESIS checkout remained clean; its stopped owner was not restarted.
 
-GitHub Actions is configured to repeat Ruff and all 28 current tests with a disposable
-PostgreSQL service. Its actual run result must be checked separately from local evidence.
+GitHub Actions [run 40082859807](https://github.com/leonzzz435/genesis-society/actions/runs/40082859807)
+passed Ruff and all 28 tests (26.78 seconds) with a disposable PostgreSQL service.
+These results apply to commit `b44db3f`; documentation-only changes do not constitute
+new runtime verification.

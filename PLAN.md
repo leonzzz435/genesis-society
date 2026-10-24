@@ -1,8 +1,8 @@
 # Implementation plan and current boundary
 
-## Starter delivered here
+## Implemented starter
 
-- [x] New standalone Python/uv repository; fresh history, private GitHub target, Apache-2.0.
+- [x] New standalone Python/uv repository; fresh history, Apache-2.0.
 - [x] One PostgreSQL world + request ledger; Alembic schema; one standard graph checkpointer.
 - [x] Native create_agent demo with two fixtures, board, DMs, memory, sleep and restart.
 - [x] Closed resident tools, private perception, append-only belief corrections.
@@ -11,12 +11,12 @@
 - [x] Standard summary middleware with a ledger-backed non-retrying callback.
 - [x] Authenticated local Creator inspector, mock Council transport and source fixtures.
 - [x] Azure/Slack configuration contracts and explicit live-integration limitations.
-- [x] Focused offline tests and Linux/Cursor documentation.
-- [ ] Public release (separate future authorization; intentionally not performed).
+- [x] Focused offline tests and editor-independent Linux documentation.
+- [x] Publication authorized; synthetic starter reviewed for public access.
 
 See docs/VERIFICATION.md for executed checks, not just checklist intent.
 
-## Cursor task 1 — Azure, with a tiny explicitly authorized probe
+## Milestone 1 — Azure, with a tiny explicitly authorized probe
 
 Starting point: mock-only executable runtime; AzureConfig supplies validated endpoint,
 deployment and zero-retry client options. No credentials are committed.
@@ -37,7 +37,7 @@ Acceptance: mocked native tools + continuation, summary failure and crash tests 
 then one separately authorized tiny real probe is recorded with actual model/usage,
 known versus estimated cost and clear compatibility limits. No world launch yet.
 
-## Cursor task 2 — Four Council identities in Slack
+## Milestone 2 — Four Council identities in Slack
 
 Starting point: four persistent consultants, shared mock chat, idempotent event intake,
 merged mention jobs, scripted replies. Independent private memories are empty containers;
@@ -58,7 +58,7 @@ Acceptance: mocked duplicate events, reconnects, reply jobs, private-memory sepa
 observer ACL and global concurrency pass; Creator confirms real app installation before
 any live messages are sent. No interventions or automatic repo changes.
 
-## Cursor task 3 — Read-only GitHub, then Notion
+## Milestone 3 — Read-only GitHub, then Notion
 
 Starting point: SourcePage/SourceRead contracts and synthetic content only.
 
@@ -72,7 +72,7 @@ installation is authorized to retain. A deployment is a single trust domain, not
 Acceptance: fixture HTTP tests for pagination, permissions, denied paths and versioned
 source references; real-source checks only on explicitly approved data. No write endpoints.
 
-## Cursor task 4 — Long-running mock and then approved live launch
+## Milestone 4 — Long-running mock and then approved live launch
 
 Starting point: bounded mock CLI run, two-fixture demo, configured 16-founder life laws.
 
@@ -91,12 +91,12 @@ Acceptance: five ready residents/two slots, clock and Slack remain responsive; s
 recovers prepared/saved work without repeat sends; 16-founder mock lifecycle test passes.
 Launch real society only with configured financial authority and explicit Creator GO.
 
-## Cursor task 5 — Public release
+## Release maintenance
 
-Run clean-clone setup, CI, secret scanning including Git history, provenance/license
-review and public synthetic demo. Document remaining limitations and measured behavior.
-Review all employer-related contributions/data before publication with the relevant owner.
-Record explicit permission to change repository visibility; do not publish automatically.
+Keep clean-clone setup, CI, Git-history secret scanning and provenance/license checks
+reproducible. Publish only synthetic demo data. Review contributions for the right to
+redistribute their code and data. Document remaining limitations and measured behavior.
+Public source availability does not imply production readiness or authorize live inference.
 
 ## Deliberate limits
 

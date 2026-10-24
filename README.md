@@ -20,7 +20,7 @@ Requirements: Python 3.12+, [uv](https://docs.astral.sh/uv/), PostgreSQL 16 (loc
 Docker, or an explicitly configured external development database).
 
 ```bash
-git clone git@github.com:leonzzz435/genesis-society.git
+git clone https://github.com/leonzzz435/genesis-society.git
 cd genesis-society
 uv sync --frozen
 docker compose up -d --wait
@@ -100,12 +100,11 @@ permissions. Request receipts preserve original inputs/responses and make replay
 explicit; they are not a second checkpointer.
 
 Read [architecture](docs/ARCHITECTURE.md), [implementation plan](PLAN.md),
-[Cursor handoff (Deutsch)](docs/CURSOR_HANDOFF.md) and [verification](docs/VERIFICATION.md).
+[development guide](docs/DEVELOPMENT.md) and [verification](docs/VERIFICATION.md).
 
 ## License and research honesty
 
 New project code: Apache-2.0. Dependencies retain their respective licenses. This
-repository contains no previous world histories or raw live model responses. Public
-release requires a separate review and explicit publication decision. Findings must
-be evidence-linked; remembered statements are not automatically facts, and offered
+repository contains no previous world histories or raw live model responses. Findings
+must be evidence-linked; remembered statements are not automatically facts, and offered
 memories are not proof that they influenced a decision.
