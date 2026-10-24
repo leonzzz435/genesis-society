@@ -1,0 +1,18 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: society
+      POSTGRES_PASSWORD: local-demo-only
+      POSTGRES_DB: society
+    ports:
+      - "127.0.0.1:55433:5432"
+    volumes:
+      - society-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U society -d society"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+volumes:
+  society-data:

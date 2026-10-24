@@ -1,0 +1,22 @@
+{
+  "provider": "mock",
+  "azure": {
+    "status": "configuration_only_not_live_verified",
+    "endpoint": "https://YOUR-RESOURCE.openai.azure.com",
+    "deployment": "YOUR-DEPLOYMENT",
+    "auth": "entra"
+  },
+  "slack": {
+    "status": "mock_transport_only",
+    "mode": "socket",
+    "channel_id": "YOUR-COUNCIL-CHANNEL",
+    "identities": ["Historian", "Strategist", "Skeptic", "Scorer"]
+  },
+  "sources": {
+    "mode": "synthetic_only",
+    "github_repositories": ["example/widget"],
+    "notion_page_ids": ["example/operations"]
+  },
+  "observability": {"external_tracing": false},
+  "financial_authority": {"paid_inference_enabled": false}
+}

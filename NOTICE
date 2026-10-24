@@ -1,0 +1,10 @@
+GENESIS Society
+Copyright 2026 GENESIS Society contributors
+
+This is a new offline research starter. It is not affiliated with an employer,
+Microsoft, Slack, GitHub, Notion, LangChain, or any model provider.
+
+No source files or research data were imported from the previous private GENESIS
+repository. General design lessons were used to write new implementation code.
+The Apache License text was obtained from the system's standard license distribution.
+Third-party dependencies remain subject to their respective licenses.

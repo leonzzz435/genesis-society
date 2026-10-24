@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "genesis-society"
+version = "0.1.0"
+description = "An offline-first starter for persistent autonomous digital societies"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+dependencies = [
+  "alembic>=1.14,<2", "sqlalchemy>=2,<3", "psycopg[binary,pool]>=3.2,<4",
+  "pydantic>=2.10,<3", "pydantic-settings>=2.7,<3",
+  "langchain>=1,<2", "langgraph>=1,<2", "langgraph-checkpoint-postgres>=3,<4",
+  "langchain-openai>=1,<2", "azure-identity>=1.20,<2",
+  "slack-bolt>=1.23,<2", "aiohttp>=3.11,<4",
+  "fastapi>=0.115,<1", "uvicorn>=0.34,<1", "jinja2>=3.1,<4",
+]
+[dependency-groups]
+dev = ["pytest>=8,<9", "pytest-asyncio>=1,<2", "httpx>=0.28,<1", "ruff>=0.9,<1"]
+[project.scripts]
+society = "genesis_society.cli:main"
+[tool.hatch.build.targets.wheel]
+packages = ["src/genesis_society"]
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

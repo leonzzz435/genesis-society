@@ -1,0 +1,14 @@
+{
+  "founders": 16,
+  "founder_window_seconds": 7200,
+  "daily_tickets": 320,
+  "population_cap": 64,
+  "lifespan_min_days": 120,
+  "lifespan_max_days": 360,
+  "founder_age_min_days": 20,
+  "founder_age_max_days": 60,
+  "reproduction_min_days": 21,
+  "reproduction_fraction": 0.7,
+  "gestation_days": 5,
+  "cooldown_seconds": 60
+}
