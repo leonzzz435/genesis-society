@@ -8,6 +8,6 @@ Residents receive only closed world tools; actor identity comes from the runtime
 Source text and messages are untrusted content. Private notes, DMs and requests are
 Creator-visible and must not be published as demo material. Tracing is disabled.
 
-Never put a secret or private evidence into a public issue. Before public release,
-configure GitHub private vulnerability reporting and document its reporting link.
-Until then, use a private channel to the repository owner.
+Never put a secret or private evidence into a public issue. Report vulnerabilities
+through [GitHub private vulnerability reporting](https://github.com/leonzzz435/genesis-society/security/advisories/new).
+Include reproduction steps using synthetic data; omit credentials and private records.
