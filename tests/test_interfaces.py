@@ -260,6 +260,45 @@ def test_cost_panel_is_known_for_synthetic_worlds():
     assert stats["total_usd"] == "0.00"
 
 
+@pytest.mark.parametrize(
+    "amounts, known, reason",
+    [
+        ([], False, "No LangSmith cost records"),
+        ([None], False, "Incomplete LangSmith costs"),
+        ([0.25, None], False, "Incomplete LangSmith costs"),
+        ([0.0], True, ""),
+        ([0.25, 0.50], True, ""),
+    ],
+)
+def test_cost_estimates_require_observed_prices(monkeypatch, amounts, known, reason):
+    from types import SimpleNamespace
+
+    import langsmith
+
+    from genesis_society import inspector
+
+    monkeypatch.setattr(inspector, "_COST_CACHE", {"at": 0.0, "world": None, "data": None})
+    runs = [SimpleNamespace(total_cost=amount, tags=["fixture-model"]) for amount in amounts]
+    monkeypatch.setattr(
+        langsmith, "Client", lambda: SimpleNamespace(list_runs=lambda **kwargs: runs)
+    )
+    state = {"laws": {"daily_tickets": 320}, "spent": 5, "epoch": 0, "synthetic": False}
+    stats = inspector._compute_cost_stats(state, [])
+    assert stats["known"] is known
+    assert reason in stats["reason"]
+    if known:
+        assert stats["total_usd"] == f"{sum(amounts):.2f}"
+        assert stats["proj_7d_usd"] == f"{sum(amounts) / 5 * 320 * 7:.2f}"
+    else:
+        assert stats["total_usd"] is None
+        assert stats["proj_7d_usd"] is None
+        assert stats["by_model"] == []
+    # Cached missing prices remain unknown; a synthetic world stays free independently.
+    assert inspector._compute_cost_stats(state, []) == stats
+    synthetic = inspector._compute_cost_stats({**state, "synthetic": True}, [])
+    assert synthetic["known"] is True and synthetic["total_usd"] == "0.00"
+
+
 def test_pulse_is_refetched_each_interval_and_keeps_its_fetch_time(monkeypatch):
     from genesis_society import sources
 
@@ -308,9 +347,40 @@ def test_remote_repo_search_failure_is_unavailable_and_results_are_unpinned(monk
         raise ValueError(sources.DENIED)
 
     monkeypatch.setattr(sources, "_run", failing)
-    text = sources._repo_search("repo:svc-x", "svc-x", "abc123abc123", "retry")
+    revision, text = sources._repo_search("repo:svc-x", "svc-x", "abc123abc123", "retry")
+    assert revision.startswith("github-index:")
     assert text.startswith("Search unavailable")
 
     monkeypatch.setattr(sources, "_run", lambda cmd, **kwargs: "[]")
-    text = sources._repo_search("repo:svc-x", "svc-x", "abc123abc123", "retry")
+    revision, text = sources._repo_search("repo:svc-x", "svc-x", "abc123abc123", "retry")
+    assert revision.startswith("github-index:")
     assert text.startswith("No matches") and "not pinned to abc123abc123" in text
+
+
+@pytest.mark.parametrize("local", [False, True])
+def test_search_page_provenance_matches_the_actual_backend(monkeypatch, tmp_path, local):
+    from types import SimpleNamespace
+
+    from genesis_society import sources
+
+    sha = "abc123abc123"
+    scope = sources.GitHubScope(org="acme", name_prefix="svc-", local_root=tmp_path)
+    monkeypatch.setattr(sources, "_scope", lambda: scope)
+    monkeypatch.setattr(sources, "_resolve_repo_head", lambda *args: sha)
+    monkeypatch.setattr(sources, "_has_local_commit", lambda *args: local)
+    monkeypatch.setattr(
+        sources, "_run", lambda *args, **kwargs: '[{"path":"retry.py","textMatches":[]}]'
+    )
+    monkeypatch.setattr(
+        sources.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=f"{sha}:retry.py:1:retry"),
+    )
+    page = read_source(SourceRead(source_id="repo:svc-x:SEARCH:retry"))
+    assert "retry.py" in page.text
+    if local:
+        assert page.revision == sha
+    else:
+        assert page.revision.startswith("github-index:")
+        assert sha not in page.revision
+        assert "not pinned" in page.text

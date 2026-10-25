@@ -11,8 +11,10 @@ external consultants observe; they do not silently mutate residents or impose pr
 
 Python/uv + LangChain create_agent + native structured tools + the standard PostgreSQL
 checkpointer. A single asyncio coordinator owns the world (PostgreSQL advisory lock),
-advances operating time and dispatches at most `SOCIETY_CONCURRENCY` resident activations
-concurrently (default four).
+advances operating time and dispatches resident activations concurrently. In live worlds,
+the persisted `laws.max_concurrency` controls the limit (default four), adjustable in the
+Creator inspector. `SOCIETY_CONCURRENCY` controls synthetic worlds and is the fallback for
+older live worlds without that stored law; it is not an additional live-world ceiling.
 Only one activation per resident is admitted. Tools terminate a wake phase through the
 standard `return_direct` sleep tool. Tool execution is local and does not spend tickets.
 

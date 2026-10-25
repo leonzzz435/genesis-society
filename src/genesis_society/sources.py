@@ -398,7 +398,7 @@ def _repo_blob(repo_name: str, revision: str, rel_path: str) -> str:
     )
 
 
-def _repo_search(prefix: str, repo_name: str, revision: str, term: str) -> str:
+def _repo_search(prefix: str, repo_name: str, revision: str, term: str) -> tuple[str, str]:
     if len(term) < 2:
         raise ValueError("Search term must be at least 2 characters")
     repo_dir = _local_dir(repo_name)
@@ -413,13 +413,14 @@ def _repo_search(prefix: str, repo_name: str, revision: str, term: str) -> str:
         all_lines = proc.stdout.splitlines()
         hits = [f"{prefix}:{line.removeprefix(revision + ':')[:140]}" for line in all_lines[:30]]
         if not hits:
-            return f"No matches for '{term}' in {repo_name}@{revision}"
+            return revision, f"No matches for '{term}' in {repo_name}@{revision}"
         header = (
             f"# Search '{term}' in {repo_name}@{revision} "
             f"(showing {len(hits)} of {len(all_lines)} matches)"
         )
-        return "\n".join([header, *hits])
+        return revision, "\n".join([header, *hits])
     # GitHub code search covers only the default branch, so its result is not pinned to revision.
+    search_revision = "github-index:" + datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     try:
         raw = _run(
             [
@@ -436,7 +437,7 @@ def _repo_search(prefix: str, repo_name: str, revision: str, term: str) -> str:
             ]
         )
     except (ValueError, subprocess.TimeoutExpired):
-        return (
+        return search_revision, (
             f"Search unavailable for '{term}' in {repo_name}: GitHub code search failed. "
             "Nothing was searched."
         )
@@ -449,8 +450,8 @@ def _repo_search(prefix: str, repo_name: str, revision: str, term: str) -> str:
         f"GitHub code search on the default branch of {repo_name}; not pinned to {revision}"
     )
     if not hits:
-        return f"No matches for '{term}' ({scope_note})"
-    return "\n".join([f"# Search '{term}' ({scope_note})", *hits])
+        return search_revision, f"No matches for '{term}' ({scope_note})"
+    return search_revision, "\n".join([f"# Search '{term}' ({scope_note})", *hits])
 
 
 def _repo_commit(repo_name: str, sha: str) -> tuple[str, str]:
@@ -655,9 +656,7 @@ def _dispatch_repo(prefix: str, repo_name: str, rel_path: str) -> tuple[str, str
     if rel_path == "PRS":
         return revision, _repo_prs(repo_name)
     if rel_path.startswith("SEARCH:"):
-        return revision, _repo_search(
-            prefix, repo_name, revision, rel_path.removeprefix("SEARCH:").strip()
-        )
+        return _repo_search(prefix, repo_name, revision, rel_path.removeprefix("SEARCH:").strip())
     return revision, _repo_blob(repo_name, revision, rel_path)
 
 

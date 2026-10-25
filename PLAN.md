@@ -16,6 +16,16 @@
 
 See docs/VERIFICATION.md for executed checks, not just checklist intent.
 
+## PR #3 review follow-up
+
+- [x] Missing or partially unpriced LangSmith data stays unknown; no fabricated zero forecast.
+- [x] Remote code-search references identify an index observation, not a pinned commit.
+  Local searches at an available commit retain that commit as their source revision.
+- [x] Document the stored live concurrency law and the environment-setting fallback correctly.
+- [x] Add focused offline regressions for missing/zero/partial prices and source provenance.
+
+Live monetary admission/settlement and heartbeat write measurement remain open in issue #2.
+
 ## Milestone 1 — Azure, with a tiny explicitly authorized probe
 
 Starting point: mock-only executable runtime; AzureConfig supplies validated endpoint,

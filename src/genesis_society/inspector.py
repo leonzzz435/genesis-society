@@ -191,7 +191,7 @@ Children: <b>{{ stats.nursery.gestating|length }}🤰</b> ·
 <b>{{ stats.nursery.born_total }}👶</b><br>
 {% if stats.cost.known %}Est. cost: <b>${{ stats.cost.today_usd }}</b> ·
 7d est: <b>${{ stats.cost.proj_7d_usd }}</b>{% else %}Cost: <b>unknown</b>
-(LangSmith unreachable){% endif %}<br>
+({{ stats.cost.reason }}){% endif %}<br>
 Quorum: <b>{{ stats.quorum }} votes</b> · Top: {{ stats.top_leader }}</small>
 </div>
 </aside>
@@ -225,7 +225,7 @@ Cap: {{ s.residents|length }}/{{ s.laws.population_cap }}</small></div>
 <small>Est. Day: <b>${{ stats.cost.proj_day_usd }}</b> ·
 7d: <b class="accent">${{ stats.cost.proj_7d_usd }}</b>
  (${{ stats.cost.per_ticket_usd }}/t)</small>{% else %}<b style="font-size:1.1rem">Unknown</b>
- <small class="muted">LangSmith cost lookup failed; retrying every 30s</small>{% endif %}</div>
+ <small class="muted">{{ stats.cost.reason }}; refreshing every 30s</small>{% endif %}</div>
 </div>
 
 {% macro render_tree_node(n) %}
@@ -666,17 +666,30 @@ def _compute_cost_stats(state, requests) -> dict:
             )
             by_mod: Counter[str] = Counter()
             total_usd = 0.0
+            missing = 0
             for r in runs:
-                c = float(r.total_cost or 0.0)
+                if r.total_cost is None:
+                    missing += 1
+                    continue
+                c = float(r.total_cost)
                 total_usd += c
                 tag = (r.tags or ["unknown"])[0]
                 by_mod[tag] += c
-            _COST_CACHE.update(at=now, world=created, data=(total_usd, by_mod))
+            _COST_CACHE.update(at=now, world=created, data=(total_usd, by_mod, len(runs), missing))
         except Exception:
             _COST_CACHE.update(at=now, world=created, data=None)
-    data = _COST_CACHE["data"]
-    known = data is not None or not live
-    total_usd, by_mod = data or (0.0, Counter())
+    # A synthetic world never inherits cost from a previously inspected live world.
+    data = _COST_CACHE["data"] if live else (0.0, Counter(), 0, 0)
+    total_usd, by_mod, observed, missing = data or (0.0, Counter(), 0, 0)
+    known = not live or (data is not None and observed > 0 and missing == 0)
+    reason = ""
+    if not known:
+        if data is None:
+            reason = "LangSmith cost lookup failed"
+        elif not observed:
+            reason = "No LangSmith cost records available"
+        else:
+            reason = f"Incomplete LangSmith costs ({missing} of {observed} runs unpriced)"
     per_ticket = (total_usd / spent_total) if spent_total > 0 else 0.0
     today_usd = per_ticket * spent_today if epoch > 0 else total_usd
     proj_day_usd = max(today_usd, per_ticket * budget)
@@ -687,12 +700,13 @@ def _compute_cost_stats(state, requests) -> dict:
     ]
     return dict(
         known=known,
-        total_usd=f"{total_usd:.2f}",
-        today_usd=f"{today_usd:.2f}",
-        per_ticket_usd=f"{per_ticket:.4f}",
-        proj_day_usd=f"{proj_day_usd:.2f}",
-        proj_7d_usd=f"{proj_7d_usd:.2f}",
-        by_model=by_model_rows,
+        reason=reason,
+        total_usd=f"{total_usd:.2f}" if known else None,
+        today_usd=f"{today_usd:.2f}" if known else None,
+        per_ticket_usd=f"{per_ticket:.4f}" if known else None,
+        proj_day_usd=f"{proj_day_usd:.2f}" if known else None,
+        proj_7d_usd=f"{proj_7d_usd:.2f}" if known else None,
+        by_model=by_model_rows if known else [],
     )
 
 
