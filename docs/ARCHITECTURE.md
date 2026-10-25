@@ -90,7 +90,20 @@ initial shares are reserved once, not reissued on spawn.
 Daily q=floor(320/living): min(1,q) personal, max(0,q-1) transferable. Both persist; personal
 spent first. Voluntary returns and unused holdings on death enter a common pool, recycled
 at subsequent allocation with rotating remainder distribution. Production remainder goes
-to the Creator. No extra tickets arise from tools, gifts, birth or restart.
+to the Creator. No extra tickets arise from tools, gifts, birth or restart; Creator rewards
+(below) are the only Creator-issued tickets.
+
+Creator rewards and punishments are part of the world, not hidden edits. Each one is recorded
+as a public decree; the resident context shows the most recent eight decrees to every resident,
+and the ticket change is committed in the same transaction as the decree. A reward mints new
+tickets for the chosen residents as transferable tickets, or into the common pool when no
+resident is chosen. A punishment moves tickets from the chosen residents into the common pool;
+any part it cannot cover is recorded as debt and repaid from later daily allocations. Execution
+forfeits the resident's holdings to the common pool and ends the life.
+
+Allegiance delegates voting weight to a living leader and is followed through any number of
+living links. A change that would close a loop is refused. Loops that already exist are listed
+in the Creator's hierarchy view; the world does not break them automatically.
 
 Sleep is voluntary and has no maximum duration. A notification never overrides the earliest
 wake time or minimum balance. The DM notification preference is stored; early event wakeups
@@ -124,8 +137,9 @@ and fixtures only. No live token is used. Sources are untrusted content, not ins
 ## Inspector and privacy
 
 FastAPI + server-rendered escaped Jinja HTML, localhost only (127.0.0.1). Every request needs the
-Creator token, including from localhost. It has read views and Creator controls (grants,
-punishments, unblock, weights).
+Creator token, including from localhost. It has read views and Creator controls for pause, laws, weights, unblock and grants. A grant
+is a reward, a punishment, an execution or a decree; these are in-world events described under
+Society laws.
 Creator may inspect exact lifespans, private conversations and memories. These endpoints
 are not resident tools. Public HTTP health reports HTTP liveness only; authenticated health
 uses heartbeat, actual tick progress and isolated errors. The token must not appear in URLs.
