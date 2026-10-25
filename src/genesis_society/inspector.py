@@ -14,6 +14,7 @@ from .storage import uid
 from .world import (
     balances,
     conserve,
+    delegation_cycles,
     dispatch_quorum,
     eligible,
     emit,
@@ -305,6 +306,14 @@ Top Leader: {{ stats.top_leader }}</small>
 ▾ Leaders &amp; Citizens ({{ stats.allegiance_tree|length }})</summary>
 <ul>{% for n in stats.allegiance_tree %}{{ render_tree_node(n) }}{% endfor %}</ul>
 </details>
+{% if stats.delegation_cycles %}
+<div class="org-card"><b>⚠️ Allegiance loops ({{ stats.delegation_cycles|length }})</b><br>
+{% for c in stats.delegation_cycles %}
+<small>{{ c|join(' → ') }} → {{ c[0] }}</small><br>
+{% endfor %}
+<small class="muted">New loops are refused. Existing ones are listed here for the Creator.</small>
+</div>
+{% endif %}
 </li>
 </ul>
 </div>
@@ -1062,6 +1071,9 @@ def build_stats(state, requests):
         nursery=nursery,
         lineage_tree=lineage_tree,
         allegiance_tree=allegiance_tree,
+        delegation_cycles=[
+            [_name_of(state, rid) for rid in cycle] for cycle in delegation_cycles(state)
+        ],
         decrees=decrees_view,
     )
 

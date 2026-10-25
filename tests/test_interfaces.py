@@ -67,6 +67,18 @@ def test_creator_inspector_auth_escape_and_truthful_health(store):
     assert worker_status(state) == "stopped"
 
 
+def test_inspector_lists_existing_allegiance_loops(store, actors):
+    token = "synthetic-local-inspector-token-only"
+    a, b = actors
+    with store.transaction() as (_, state):
+        state["residents"][a]["allegiance"] = b
+        state["residents"][b]["allegiance"] = a
+    with TestClient(app_for(store, token)) as client:
+        response = client.get("/", headers={"Authorization": "Bearer " + token})
+    assert response.status_code == 200
+    assert "Allegiance loops (1)" in response.text
+
+
 def test_azure_contract_no_client_no_network():
     config = AzureConfig(
         endpoint="https://fixture.openai.azure.com", deployment="private-deployment"

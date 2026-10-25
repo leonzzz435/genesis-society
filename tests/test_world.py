@@ -5,7 +5,17 @@ import pytest
 from genesis_society.actions import conversational_context, execute, recall
 from genesis_society.config import Laws
 from genesis_society.storage import uid
-from genesis_society.world import DAY, allocate, conserve, new_resident, resident_context, tick
+from genesis_society.world import (
+    DAY,
+    allocate,
+    conserve,
+    delegation_cycles,
+    new_resident,
+    represented_by,
+    resident_context,
+    tick,
+    voting_weight,
+)
 
 
 def act(store, actor, kind, **args):
@@ -266,6 +276,30 @@ def test_daily_team_dispatch_cap_and_visibility(store, actors):
         store, a, "escalate_to_team", title="Royal decree", text="Verified.", sources=[a]
     )
     assert king_send["status"] == "sent" and king_send["votes"] == 3 and d is not None
+
+
+def test_allegiance_loop_is_refused_and_existing_loops_are_listed(store, actors):
+    a, b = actors
+    act(store, b, "update_identity", name="Vassal", allegiance=a)
+    with pytest.raises(ValueError, match="already follows you"):
+        act(store, a, "update_identity", name="King", allegiance=b)
+    assert store.snapshot()["residents"][a]["allegiance"] is None
+    assert delegation_cycles(store.snapshot()) == []
+    with store.transaction() as (_, state):
+        # A loop written before the refusal existed must still be visible to the Creator.
+        state["residents"][a]["allegiance"] = b
+    cycles = delegation_cycles(store.snapshot())
+    assert len(cycles) == 1 and sorted(cycles[0]) == sorted([a, b])
+
+
+def test_long_delegation_chain_is_followed_without_a_hop_cap(store):
+    with store.transaction() as (_, state):
+        ids = [new_resident(state, age_days=3, lifespan_days=10) for _ in range(18)]
+        for leader, follower in zip(ids, ids[1:], strict=False):
+            state["residents"][follower]["allegiance"] = leader
+    state = store.snapshot()
+    assert voting_weight(state, ids[0]) == 18
+    assert ids[-1] in represented_by(state, [ids[0]])
 
 
 def _walk(read, limit):

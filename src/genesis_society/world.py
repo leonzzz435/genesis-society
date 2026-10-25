@@ -184,7 +184,7 @@ def format_world_time(seconds: float) -> str:
 def _transitively_follows(state, citizen_id: str, targets: set[str]) -> bool:
     cur = citizen_id
     visited: set[str] = set()
-    while cur and cur not in visited and len(visited) < 16:
+    while cur and cur not in visited:
         if cur in targets:
             return True
         visited.add(cur)
@@ -193,6 +193,32 @@ def _transitively_follows(state, citizen_id: str, targets: set[str]) -> bool:
             return False
         cur = r.get("allegiance")
     return False
+
+
+def delegation_would_cycle(state, actor_id: str, leader_id: str) -> bool:
+    """True if actor following leader would close a loop through living allegiances."""
+    return _transitively_follows(state, leader_id, {actor_id})
+
+
+def delegation_cycles(state) -> list[list[str]]:
+    """Existing allegiance loops among living residents, each as its ordered resident IDs."""
+    cycles: list[list[str]] = []
+    settled: set[str] = set()
+    for start in state["residents"]:
+        path: list[str] = []
+        position: dict[str, int] = {}
+        cur = start
+        while cur and cur not in settled and cur not in position:
+            r = state["residents"].get(cur)
+            if not r or not r["alive"]:
+                break
+            position[cur] = len(path)
+            path.append(cur)
+            cur = r.get("allegiance")
+        if cur in position:
+            cycles.append(path[position[cur] :])
+        settled.update(path)
+    return cycles
 
 
 def represented_by(state, signers):

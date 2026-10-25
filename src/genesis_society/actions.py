@@ -14,6 +14,7 @@ from .sources import SOURCES, SourceRead, list_source_entrypoints, read_source
 from .storage import uid
 from .world import (
     DAY,
+    delegation_would_cycle,
     dispatch_quorum,
     eligible,
     emit,
@@ -523,6 +524,11 @@ def apply(state, actor, action, source_result=None):
                     updates["allegiance"] = None
                 else:
                     leader = resident(state, target)
+                    if delegation_would_cycle(state, actor, leader["id"]):
+                        raise ValueError(
+                            "That leader already follows you, directly or through others; "
+                            "choose a leader outside your own chain"
+                        )
                     updates["allegiance"] = leader["id"]
             if not updates or all(r.get(k) == v for k, v in updates.items()):
                 raise ValueError("No identity change; omit unchanged fields or choose another tool")
