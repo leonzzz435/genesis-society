@@ -1,4 +1,4 @@
-"""Configuration contracts only. No constructor here opens a remote connection."""
+"""Azure AI Foundry connector and Council transport contracts."""
 
 from typing import Literal
 from urllib.parse import urlsplit
@@ -37,6 +37,39 @@ class AzureConfig(BaseModel):
             timeout=60,
             max_tokens=8192,
         )
+
+
+def build_foundry_model(resource: str, profile: str, token_provider=None):
+    deployment, _, effort = profile.partition(":")
+    if token_provider is None:
+        from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+
+        token_provider = get_bearer_token_provider(
+            DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
+        )
+    if deployment.startswith("claude-"):
+        from anthropic import AnthropicFoundry, AsyncAnthropicFoundry
+        from langchain_anthropic import ChatAnthropic
+
+        extra = (
+            dict(thinking={"type": "adaptive"}, output_config={"effort": effort}) if effort else {}
+        )
+        model = ChatAnthropic(
+            model=deployment, api_key="entra", max_tokens=8192, max_retries=0, **extra
+        )
+        kw = dict(
+            resource=resource, azure_ad_token_provider=token_provider, max_retries=0, timeout=60
+        )
+        model._client = AnthropicFoundry(**kw)
+        model._async_client = AsyncAnthropicFoundry(**kw)
+        return model
+    from langchain_openai import ChatOpenAI
+
+    opts = AzureConfig(
+        endpoint=f"https://{resource}.openai.azure.com", deployment=deployment
+    ).client_options()
+    extra = dict(reasoning_effort=effort) if effort else {}
+    return ChatOpenAI(api_key=token_provider, use_responses_api=True, **extra, **opts)
 
 
 class SlackBot(BaseModel):

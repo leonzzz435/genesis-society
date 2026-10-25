@@ -11,7 +11,13 @@ from genesis_society.connectors import (
     receive_mock_council,
 )
 from genesis_society.inspector import app_for, worker_status
-from genesis_society.sources import SourceRead, read_source
+from genesis_society.sources import (
+    SourceRead,
+    _discover_github_repos,
+    _scope,
+    list_source_entrypoints,
+    read_source,
+)
 from genesis_society.world import COUNCIL
 
 
@@ -32,6 +38,24 @@ def test_creator_inspector_auth_escape_and_truthful_health(store):
         login = client.post("/login", data={"token": token})
         assert login.status_code == 200 and "Residents" in login.text
         assert client.get("/").headers["cache-control"] == "no-store"
+        client.post(
+            "/control",
+            data={"action": "weights", "w:gpt-5.6-sol": "0.75", "w:claude-sonnet-5-5": "0.25"},
+        )
+        client.post(
+            "/control",
+            data={
+                "action": "grant",
+                "kind": "reward",
+                "amount": "15",
+                "recipient_id": "",
+                "reason": "Strong teamplay",
+            },
+        )
+        snap = store.snapshot()
+        assert snap["laws"]["birth_weights"] == {"gpt-5.6-sol": 0.75, "claude-sonnet-5-5": 0.25}
+        assert snap["pool"] == 15
+        assert "REWARDED" in snap["decrees"][0]["text"]
     state = store.snapshot()
     state["health"] = dict(status="running", heartbeat=time.time() - 100)
     assert worker_status(state) == "stale"
@@ -88,10 +112,50 @@ def test_mock_council_dedupe_mentions_and_no_reply_storm(store):
     assert state["spent"] == 0
 
 
-def test_source_allowlist_version_and_pagination():
+@pytest.fixture
+def github_scope_unset(monkeypatch):
+    for name in (
+        "SOCIETY_GITHUB_ORG",
+        "SOCIETY_GITHUB_REPO_PREFIX",
+        "SOCIETY_GITHUB_CONTEXT_REPO",
+        "SOCIETY_GITHUB_DEPLOYMENTS_REPO",
+        "SOCIETY_LOCAL_REPO_ROOT",
+    ):
+        monkeypatch.setenv(name, "")
+    _scope.cache_clear()
+    yield
+    _scope.cache_clear()
+
+
+def test_source_allowlist_version_and_pagination(github_scope_unset):
     first = read_source(SourceRead(source_id="github:example/widget/README.md", limit=20))
     second = read_source(SourceRead(source_id=first.source_id, offset=first.next_offset, limit=20))
     assert first.revision == second.revision
     assert first.offset == 0 and second.offset == 20
+    for denied in ("/etc/passwd", "repo:example-service:.env", "repo:unknown:README.md"):
+        with pytest.raises(ValueError):
+            read_source(SourceRead(source_id=denied))
+
+
+def test_github_sources_fail_closed_without_configured_scope(github_scope_unset):
+    assert list_source_entrypoints() == []
+    for denied in (
+        "github:PULSE",
+        "github:SEARCH:retry",
+        "context:INDEX",
+        "deployments:INDEX",
+        "repo:example-service:INDEX",
+    ):
+        with pytest.raises(ValueError):
+            read_source(SourceRead(source_id=denied))
+
+
+def test_live_github_sources_when_configured():
+    if not _scope().repos_enabled:
+        pytest.skip("Set SOCIETY_GITHUB_ORG and SOCIETY_GITHUB_REPO_PREFIX for live reads")
+    repos = _discover_github_repos()
+    assert repos, "the configured scope should expose at least one canonical repo"
+    index = read_source(SourceRead(source_id=f"repo:{repos[0]}:INDEX", limit=100))
+    assert not index.synthetic and len(index.revision) == 12 and index.text
     with pytest.raises(ValueError):
-        read_source(SourceRead(source_id="/etc/passwd"))
+        read_source(SourceRead(source_id=f"repo:{repos[0]}:.env"))

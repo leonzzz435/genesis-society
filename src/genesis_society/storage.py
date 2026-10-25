@@ -56,18 +56,29 @@ class Store:
                 for r in session.scalars(select(Request).order_by(Request.created_at))
             ]
 
-    def trace_ids(self, actor, limit=4):
+    def requests_summary(self):
         with Session(self.engine) as session:
+            return [
+                dict(
+                    id=r.id,
+                    actor=r.actor,
+                    phase=r.phase,
+                    purpose=(r.data or {}).get("purpose", "decision"),
+                    profile=(r.data or {}).get("profile"),
+                    usage=(r.data or {}).get("usage"),
+                    world_clock=(r.data or {}).get("world_clock"),
+                )
+                for r in session.scalars(select(Request).order_by(Request.created_at))
+            ]
+
+    def trace_ids(self, actor, limit=4, exclude_prefix=""):
+        with Session(self.engine) as session:
+            stmt = select(Request.id).where(Request.actor == actor)
+            if exclude_prefix:
+                stmt = stmt.where(~Request.id.startswith(exclude_prefix))
             return list(
                 reversed(
-                    list(
-                        session.scalars(
-                            select(Request.id)
-                            .where(Request.actor == actor)
-                            .order_by(Request.created_at.desc())
-                            .limit(limit)
-                        )
-                    )
+                    list(session.scalars(stmt.order_by(Request.created_at.desc()).limit(limit)))
                 )
             )
 

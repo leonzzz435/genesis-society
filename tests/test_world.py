@@ -61,6 +61,8 @@ def test_consent_gestation_cap_and_inherited_testimony(store, actors):
     act(store, b, "consent_child", proposal_id=proposal["proposal_id"])
     with store.transaction() as (_, state):
         state["laws"]["population_cap"] = 2
+        state["synthetic"] = False
+        state["laws"]["birth_weights"] = {"retired-v1": 0.0, "claude-sonnet-5-5:medium": 1.0}
         # Both parents can age beyond reproductive eligibility after consent.
         for r in state["residents"].values():
             r["born"] = -100 * DAY
@@ -70,6 +72,9 @@ def test_consent_gestation_cap_and_inherited_testimony(store, actors):
         state["laws"]["population_cap"] = 3
         tick(state, 0)
         child = next(r for r in state["residents"].values() if r["parents"])
+        assert child["profile"] == "claude-sonnet-5-5:medium"
+        assert resident_context(state, child["id"])["parents"] == [a, b]
+        assert child["id"] in resident_context(state, a)["children"]
         assert child["personal"] == child["transferable"] == 0
         assert child["memories"][0]["inherited"]
         assert child["memories"][0]["id"] in child["seen"]
@@ -209,3 +214,55 @@ def test_replay_distinguishes_omitted_identity_fields_from_explicit_clear(store,
     assert store.snapshot()["residents"][actor]["description"] == ""
     with pytest.raises(ValueError, match="No identity change"):
         act(store, actor, "update_identity")
+
+
+def test_daily_team_dispatch_cap_and_visibility(store, actors):
+    a, b = actors
+    src_a = act(store, a, "read_source", source_id="github:example/widget/README.md")
+    draft = act(
+        store,
+        a,
+        "escalate_to_team",
+        title="Retry timeout finding",
+        text="Widget requests time out after 30s.",
+        sources=[src_a["reference"]],
+    )
+    assert draft["status"] == "pending_cosign"
+    with pytest.raises(ValueError, match="Another resident"):
+        act(
+            store,
+            a,
+            "escalate_to_team",
+            escalation_id=draft["escalation_id"],
+            sources=[src_a["reference"]],
+        )
+    src_b = act(store, b, "read_source", source_id="github:example/widget/README.md")
+    sent = act(
+        store,
+        b,
+        "escalate_to_team",
+        escalation_id=draft["escalation_id"],
+        sources=[src_b["reference"]],
+    )
+    assert sent["status"] == "sent" and sent["epoch"] == 0
+    with pytest.raises(ValueError, match="already sent"):
+        act(store, b, "escalate_to_team", title="Second", text="Blocked", sources=[b])
+    ctx_b = resident_context(store.snapshot(), b)
+    assert not ctx_b["daily_team_dispatch_available"]
+    assert ctx_b["team_dispatches"][0]["title"] == "Retry timeout finding"
+    with store.transaction() as (_, state):
+        tick(state, DAY)
+    assert resident_context(store.snapshot(), b)["daily_team_dispatch_available"]
+    # Test emergent kingdom/delegation quorum in live society mode
+    with store.transaction() as (_, state):
+        state["synthetic"] = False
+        c = new_resident(state, age_days=3, lifespan_days=10, name="Scout")
+        d = new_resident(state, age_days=3, lifespan_days=10, name="Builder")
+    act(store, a, "update_identity", name="King")
+    act(store, b, "update_identity", name="Vassal", allegiance=a)
+    act(store, c, "update_identity", allegiance=a)
+    # 4 living residents -> quorum is max(3, (4+2)//3) = 3. King represents a, b, c (3 votes).
+    king_send = act(
+        store, a, "escalate_to_team", title="Royal decree", text="Verified.", sources=[a]
+    )
+    assert king_send["status"] == "sent" and king_send["votes"] == 3 and d is not None

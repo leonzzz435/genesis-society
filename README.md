@@ -8,8 +8,8 @@ message board, exchange DMs, remember experiences, save and gift compute tickets
 sleep and independently consent to reproduction. The intended external environment
 is read-only GitHub and Notion; the Creator discusses observations with a Council in Slack.
 
-**Current status:** runnable synthetic PostgreSQL demo. The model is scripted. Azure,
-Slack and live source access are not connected or certified. This is not an autonomous
+**Current status:** runnable synthetic PostgreSQL demo. The model is scripted. Azure and
+GitHub adapters are opt-in, fail closed and not certified. Slack and Notion are not connected. This is not an autonomous
 production deployment, and the demo does not demonstrate emergent social behavior.
 
 ![Authenticated inspector with synthetic residents, board and DMs](docs/images/offline-demo.png)
@@ -92,7 +92,9 @@ Default test administration uses the synthetic Compose server. Override with
 | Concurrent activity / recovery | Two slots, per-resident isolation, durable request receipts |
 | Creator inspector | Local authenticated HTML and read-only API |
 | Council | Four persistent identities; scripted transport intake/reply only |
-| Azure / Slack / GitHub / Notion live | **Not implemented or live-verified** |
+| Azure AI Foundry inference | Opt-in adapter (`SOCIETY_PROVIDER=azure_foundry`); not live-verified in CI |
+| GitHub read-only sources | Opt-in, fail-closed scope (`SOCIETY_GITHUB_ORG` + repo prefix); not live-verified in CI |
+| Slack / Notion live | **Not implemented or live-verified** |
 | 16-resident autonomous launch | Deferred until real integration acceptance |
 
 The framework owns executable graph state. Our small kernel owns world rules and
