@@ -416,3 +416,38 @@ async def test_context_limit_blocks_before_spending(store, actors):
     with pytest.raises(Waiting, match="Context exceeds"):
         await WorldContext().awrap_model_call(request, handler)
     assert not invoked and store.snapshot()["spent"] == 0
+
+
+async def test_dynamic_toolset_lazy_loading(store, actors):
+    from types import SimpleNamespace
+
+    from langchain.agents.middleware.types import ModelRequest, ModelResponse
+
+    from genesis_society.actions import execute
+    from genesis_society.runtime import WorldContext
+    from genesis_society.storage import uid
+
+    unpause(store)
+    with store.transaction() as (_, state):
+        state["synthetic"] = False
+    seen_tools = []
+
+    async def handler(req):
+        seen_tools.append({t.name for t in req.tools})
+        return ModelResponse(result=[AIMessage(content="ok")])
+
+    req0 = ModelRequest(
+        model=MockResident(),
+        messages=[HumanMessage(content="turn 0")],
+        tools=tools(),
+        state={"call_index": 0},
+        runtime=SimpleNamespace(context=Context(store, actors[0], "lazy-test")),
+    )
+    await WorldContext().awrap_model_call(req0, handler)
+    assert "use_toolset" in seen_tools[0]
+    assert "read_source" not in seen_tools[0] and "write_object" not in seen_tools[0]
+
+    execute(store, actors[0], {"kind": "use_toolset", "groups": ["github"]}, uid())
+    req1 = req0.override(state={"call_index": 1})
+    await WorldContext().awrap_model_call(req1, handler)
+    assert "read_source" in seen_tools[1] and "write_object" not in seen_tools[1]

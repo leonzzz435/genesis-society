@@ -1,7 +1,7 @@
 # Engineering instructions — GENESIS Society
 
 Read `docs/ARCHITECTURE.md`, `PLAN.md` and `docs/DEVELOPMENT.md` before changing behavior.
-This is an offline research starter, not a production deployment.
+Offline by default. Live adapters are opt-in, fail closed and are not production-certified.
 
 ## Purpose
 Persistent autonomous digital residents with identity, memory, private conversations,
@@ -20,6 +20,17 @@ Residents are not task assistants required to be productive, agreeable or cooper
 - World laws are configuration. Changes need explicit Creator intent and tests.
 - This repository has no affiliation with an employer. Use only authorized sources.
 
+## Optional live adapters
+- Live Azure inference needs `SOCIETY_PROVIDER=azure_foundry`, `SOCIETY_PAID_INFERENCE_ENABLED=true`
+  and `SOCIETY_AZURE_RESOURCE`. Use a dedicated, non-production Azure AI Foundry resource.
+- Live GitHub reads need `SOCIETY_GITHUB_ORG` and `SOCIETY_GITHUB_REPO_PREFIX`. Without both,
+  no repository is readable. Reads go through read-only `gh` and `git` commands.
+- Put secrets and installation-specific names only in a local `.env`, which is gitignored.
+  Never write them into docs, fixtures, examples or commits.
+- Tests that need the network skip unless the live GitHub scope is configured.
+- Residents never receive customer data, production database access or write access to
+  external systems.
+
 ## Development
 Python 3.12+, uv, PostgreSQL 16. Run `uv sync --frozen` then `docker compose up -d --wait`
 (or supply an external PostgreSQL URL). See README for the offline demo.
@@ -32,5 +43,5 @@ Mock narrative is scripted infrastructure evidence, never proof of emergent beha
 ## Delivery discipline
 Keep PLAN status honest. Complete one bounded task at a time with focused tests.
 Document behavior, remaining limits and exact verification. No enormous speculative
-architecture pass. Do not enable Azure, Slack, GitHub, Notion or paid execution just
-because configuration placeholders exist. Obtain installation-specific authorization.
+architecture pass. Do not enable Azure, GitHub, Slack, Notion or paid execution for an installation without its
+owner's explicit authorization. Placeholders in `.env.example` are not authorization.
