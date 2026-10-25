@@ -188,7 +188,9 @@ cursor:pointer;font-size:0.8rem;color:#b4c4d4}
 Children: <b>{{ stats.nursery.gestating|length }}🤰</b> ·
 <b>{{ stats.nursery.proposed|length }}💌</b> ·
 <b>{{ stats.nursery.born_total }}👶</b><br>
-Cost: <b>${{ stats.cost.today_usd }}</b> · 7d Est: <b>${{ stats.cost.proj_7d_usd }}</b><br>
+{% if stats.cost.known %}Est. cost: <b>${{ stats.cost.today_usd }}</b> ·
+7d est: <b>${{ stats.cost.proj_7d_usd }}</b>{% else %}Cost: <b>unknown</b>
+(LangSmith unreachable){% endif %}<br>
 Quorum: <b>{{ stats.quorum }} votes</b> · Top: {{ stats.top_leader }}</small>
 </div>
 </aside>
@@ -213,15 +215,16 @@ Cap: {{ s.residents|length }}/{{ s.laws.population_cap }}</small></div>
 <b style="font-size:1.1rem">{{ stats.quorum }}v quorum · {{ stats.repo_reads }} GH reads</b><br>
 <small>Top: {{ stats.top_leader }} · {{ stats.total_tool_calls }} tools ·
 {{ 'Dispatch Open' if stats.dispatch_open else 'Dispatch Sent' }}</small></div>
-<div class="card">Cost & 7-Day Forecast
+<div class="card">Estimated cost & 7-day forecast
 <span class="tip"
- data-tip="Live USD cost from LangSmith EU (cached 30s), scaled by your daily ticket budget."
+ data-tip="LangSmith estimate (cached 30s), scaled by daily tickets. Not billing."
 >?</span><br>
-<b style="font-size:1.1rem">${{ stats.cost.today_usd }} today</b>
+{% if stats.cost.known %}<b style="font-size:1.1rem">${{ stats.cost.today_usd }} today</b>
  <small class="muted">(total ${{ stats.cost.total_usd }})</small><br>
 <small>Est. Day: <b>${{ stats.cost.proj_day_usd }}</b> ·
 7d: <b class="accent">${{ stats.cost.proj_7d_usd }}</b>
- (${{ stats.cost.per_ticket_usd }}/t)</small></div>
+ (${{ stats.cost.per_ticket_usd }}/t)</small>{% else %}<b style="font-size:1.1rem">Unknown</b>
+ <small class="muted">LangSmith cost lookup failed; retrying every 30s</small>{% endif %}</div>
 </div>
 
 {% macro render_tree_node(n) %}
@@ -367,7 +370,7 @@ Top Leader: {{ stats.top_leader }}</small>
 <span><span class="bar"><span class="fill gold" style="width:{{ pct }}%"></span></span>
 <b>{{ count }}</b></span></div>{% endfor %}
 {% if stats.cost.by_model %}
-<h3 style="margin-top:12px">💰 Live Cost by Model (LangSmith)</h3>
+<h3 style="margin-top:12px">💰 Estimated cost by model (LangSmith)</h3>
 {% for mod, usd, pct in stats.cost.by_model %}
 <div class="field"><small>{{ mod }}</small>
 <span><span class="bar"><span class="fill" style="width:{{ pct }}%"></span></span>
@@ -633,11 +636,9 @@ def _compute_cost_stats(state, requests) -> dict:
     )
     created = state.get("created_at_utc")
     now = time.time()
-    if not state.get("synthetic", True) and (
-        _COST_CACHE["data"] is None
-        or now - _COST_CACHE["at"] > 30
-        or _COST_CACHE["world"] != created
-    ):
+    live = not state.get("synthetic", True)
+    # Failed lookups are cached as unknown for 30 seconds, not retried on every poll.
+    if live and (now - _COST_CACHE["at"] > 30 or _COST_CACHE["world"] != created):
         try:
             from datetime import datetime
 
@@ -663,9 +664,10 @@ def _compute_cost_stats(state, requests) -> dict:
                 by_mod[tag] += c
             _COST_CACHE.update(at=now, world=created, data=(total_usd, by_mod))
         except Exception:
-            if _COST_CACHE["data"] is None:
-                _COST_CACHE["data"] = (0.0, Counter())
-    total_usd, by_mod = _COST_CACHE["data"] or (0.0, Counter())
+            _COST_CACHE.update(at=now, world=created, data=None)
+    data = _COST_CACHE["data"]
+    known = data is not None or not live
+    total_usd, by_mod = data or (0.0, Counter())
     per_ticket = (total_usd / spent_total) if spent_total > 0 else 0.0
     today_usd = per_ticket * spent_today if epoch > 0 else total_usd
     proj_day_usd = max(today_usd, per_ticket * budget)
@@ -675,6 +677,7 @@ def _compute_cost_stats(state, requests) -> dict:
         (m, f"{v:.3f}", max(6, int(v * 100 / max_m))) for m, v in by_mod.most_common(8) if v > 0
     ]
     return dict(
+        known=known,
         total_usd=f"{total_usd:.2f}",
         today_usd=f"{today_usd:.2f}",
         per_ticket_usd=f"{per_ticket:.4f}",

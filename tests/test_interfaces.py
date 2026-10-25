@@ -198,3 +198,34 @@ def test_creator_unblock_releases_resident_like_the_timer(store, actors):
     assert conserve(state)
     with Session(store.engine) as session:
         assert session.get(Request, "ui-timeout").phase == "abandoned"
+
+
+def test_cost_panel_reports_unknown_when_langsmith_is_unreachable(monkeypatch):
+    import langsmith
+
+    from genesis_society import inspector
+
+    monkeypatch.setattr(inspector, "_COST_CACHE", {"at": 0.0, "world": None, "data": None})
+
+    def unreachable(*args, **kwargs):
+        raise RuntimeError("langsmith down")
+
+    monkeypatch.setattr(langsmith, "Client", unreachable)
+    state = {"laws": {"daily_tickets": 320}, "spent": 5, "epoch": 0, "synthetic": False}
+    stats = inspector._compute_cost_stats(state, [])
+    assert stats["known"] is False
+    assert stats["by_model"] == []
+    # A failed lookup is remembered, so the next poll does not query LangSmith again.
+    calls = []
+    monkeypatch.setattr(langsmith, "Client", lambda *a, **k: calls.append(1) or unreachable())
+    inspector._compute_cost_stats(state, [])
+    assert calls == []
+
+
+def test_cost_panel_is_known_for_synthetic_worlds():
+    from genesis_society import inspector
+
+    state = {"laws": {"daily_tickets": 320}, "spent": 5, "epoch": 0, "synthetic": True}
+    stats = inspector._compute_cost_stats(state, [])
+    assert stats["known"] is True
+    assert stats["total_usd"] == "0.00"
