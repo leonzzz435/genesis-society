@@ -1212,8 +1212,7 @@ def app_for(store, token):
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
     def authorized(request, authorization):
-        if request.client and request.client.host == "127.0.0.1":
-            return True
+        # No address-based exemption: local processes must present the Creator token too.
         credential = authorization.removeprefix("Bearer ") or request.cookies.get("creator", "")
         return hmac.compare_digest(credential, token)
 

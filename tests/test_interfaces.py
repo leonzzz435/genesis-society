@@ -127,6 +127,19 @@ def github_scope_unset(monkeypatch):
     _scope.cache_clear()
 
 
+def test_loopback_clients_need_creator_credentials(store):
+    token = "synthetic-local-inspector-token-only"
+    with TestClient(app_for(store, token), client=("127.0.0.1", 50000)) as client:
+        assert client.get("/health").json() == {"http": "responsive"}
+        assert client.get("/").status_code == 401
+        assert client.get("/api/snapshot").status_code == 401
+        denied = client.post("/control", data={"action": "weights", "w:gpt-5.6-sol": "1.0"})
+        assert denied.status_code == 401
+        assert store.snapshot()["laws"]["birth_weights"] != {"gpt-5.6-sol": 1.0}
+        headers = {"Authorization": "Bearer " + token}
+        assert client.get("/api/snapshot", headers=headers).status_code == 200
+
+
 def test_source_allowlist_version_and_pagination(github_scope_unset):
     first = read_source(SourceRead(source_id="github:example/widget/README.md", limit=20))
     second = read_source(SourceRead(source_id=first.source_id, offset=first.next_offset, limit=20))

@@ -98,13 +98,20 @@ class Ledger:
                 raise Waiting("World paused or resident no longer active")
             if r["personal"]:
                 r["personal"] -= 1
+                debited = "personal"
             elif r["transferable"]:
                 r["transferable"] -= 1
+                debited = "transferable"
             else:
                 raise Waiting("No tickets")
             state["spent"] += 1
             req.phase = "sent"
-            req.data = dict(req.data, sent_at=time.time(), world_clock=state["clock"])
+            req.data = dict(
+                req.data,
+                sent_at=time.time(),
+                world_clock=state["clock"],
+                debited=debited,
+            )
             assert conserve(state)
 
     def save(self, key, response):
@@ -141,21 +148,27 @@ class Ledger:
         is_rate_limit = (
             "RateLimit" in type(error).__name__ or getattr(error, "status_code", None) == 429
         )
+        refunded = False
         with self.store.transaction() as (session, state):
             req = session.get(Request, key)
             if req and req.phase == "sent":
                 r = state["residents"][req.actor]
-                if is_rate_limit:
+                account = req.data.get("debited")
+                # Refund only the account that was actually debited. Legacy receipts
+                # without that record stay ambiguous rather than guessing an account.
+                if is_rate_limit and account in ("personal", "transferable"):
                     req.phase = "prepared"
-                    r["transferable"] += 1
+                    r[account] += 1
                     state["spent"] -= 1
+                    req.data = {k: v for k, v in req.data.items() if k != "debited"}
                     r["wake_at"] = max(r["wake_at"], state["clock"] + 15)
                     assert conserve(state)
+                    refunded = True
                 else:
                     req.phase = "uncertain"
                     req.data = dict(req.data, error_type=type(error).__name__)
                     r["blocked"] = "uncertain_request:" + key
-        if is_rate_limit:
+        if refunded:
             raise Waiting("Provider rate limit; backing off 15s") from error
 
     def recover(self):

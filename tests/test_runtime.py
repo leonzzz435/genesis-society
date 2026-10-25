@@ -451,3 +451,60 @@ async def test_dynamic_toolset_lazy_loading(store, actors):
     req1 = req0.override(state={"call_index": 1})
     await WorldContext().awrap_model_call(req1, handler)
     assert "read_source" in seen_tools[1] and "write_object" not in seen_tools[1]
+
+
+class RateLimitError(Exception):
+    """Stands in for a provider 429; the ledger recognizes it by type name."""
+
+
+def test_rate_limit_refunds_only_the_account_that_was_debited(store, actors):
+    a, _ = actors
+    unpause(store)
+    ledger = Ledger(store)
+
+    def set_balances(personal, transferable):
+        with store.transaction() as (_, state):
+            r = state["residents"][a]
+            before = r["personal"] + r["transferable"]
+            r["personal"], r["transferable"] = personal, transferable
+            state["issued"] += personal + transferable - before
+            assert conserve(state)
+
+    def balances():
+        r = store.snapshot()["residents"][a]
+        return r["personal"], r["transferable"]
+
+    for key, start, after_debit in (
+        ("rl-personal", (1, 1), (0, 1)),
+        ("rl-transferable", (0, 1), (0, 0)),
+    ):
+        set_balances(*start)
+        spent_before = store.snapshot()["spent"]
+        ledger.prepare(key, a, [HumanMessage(content="original")])
+        ledger.mark_sent(key)
+        assert balances() == after_debit
+        with pytest.raises(Waiting):
+            ledger.uncertain(key, RateLimitError("429"))
+        assert balances() == start
+        assert store.snapshot()["spent"] == spent_before
+        with Session(store.engine) as session:
+            assert session.get(Request, key).phase == "prepared"
+        assert conserve(store.snapshot())
+
+
+def test_rate_limit_without_debit_record_stays_ambiguous(store, actors):
+    a, _ = actors
+    unpause(store)
+    ledger = Ledger(store)
+    ledger.prepare("rl-legacy", a, [HumanMessage(content="original")])
+    ledger.mark_sent("rl-legacy")
+    with Session(store.engine) as session:
+        req = session.get(Request, "rl-legacy")
+        req.data = {k: v for k, v in req.data.items() if k != "debited"}
+        session.commit()
+    ledger.uncertain("rl-legacy", RateLimitError("429"))
+    state = store.snapshot()
+    assert state["residents"][a]["blocked"] == "uncertain_request:rl-legacy"
+    with Session(store.engine) as session:
+        assert session.get(Request, "rl-legacy").phase == "uncertain"
+    assert conserve(state)
