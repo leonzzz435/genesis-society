@@ -28,7 +28,11 @@ from sqlalchemy.orm import Session
 from . import actions
 from .config import Settings
 from .storage import Request, uid, utcnow
-from .world import TOOLSETS, conserve, emit, tick
+from .world import TOOLSETS, conserve, emit, release_actor, tick
+
+# A resident blocked by an unresolved request is released after this long.
+UNCERTAIN_ABANDON_SECONDS = 3600
+UNCERTAIN_SWEEP_SECONDS = 5
 
 
 class Waiting(Exception):
@@ -98,13 +102,20 @@ class Ledger:
                 raise Waiting("World paused or resident no longer active")
             if r["personal"]:
                 r["personal"] -= 1
+                debited = "personal"
             elif r["transferable"]:
                 r["transferable"] -= 1
+                debited = "transferable"
             else:
                 raise Waiting("No tickets")
             state["spent"] += 1
             req.phase = "sent"
-            req.data = dict(req.data, sent_at=time.time(), world_clock=state["clock"])
+            req.data = dict(
+                req.data,
+                sent_at=time.time(),
+                world_clock=state["clock"],
+                debited=debited,
+            )
             assert conserve(state)
 
     def save(self, key, response):
@@ -141,21 +152,29 @@ class Ledger:
         is_rate_limit = (
             "RateLimit" in type(error).__name__ or getattr(error, "status_code", None) == 429
         )
+        refunded = False
         with self.store.transaction() as (session, state):
             req = session.get(Request, key)
             if req and req.phase == "sent":
                 r = state["residents"][req.actor]
-                if is_rate_limit:
+                account = req.data.get("debited")
+                # Refund only the account that was actually debited. Legacy receipts
+                # without that record stay ambiguous rather than guessing an account.
+                if is_rate_limit and account in ("personal", "transferable"):
                     req.phase = "prepared"
-                    r["transferable"] += 1
+                    r[account] += 1
                     state["spent"] -= 1
+                    req.data = {k: v for k, v in req.data.items() if k != "debited"}
                     r["wake_at"] = max(r["wake_at"], state["clock"] + 15)
                     assert conserve(state)
+                    refunded = True
                 else:
                     req.phase = "uncertain"
-                    req.data = dict(req.data, error_type=type(error).__name__)
+                    req.data = dict(
+                        req.data, error_type=type(error).__name__, uncertain_at=time.time()
+                    )
                     r["blocked"] = "uncertain_request:" + key
-        if is_rate_limit:
+        if refunded:
             raise Waiting("Provider rate limit; backing off 15s") from error
 
     def recover(self):
@@ -178,6 +197,7 @@ class Ledger:
                     resident["blocked"] = None
             for req in session.scalars(select(Request).where(Request.phase == "sent")):
                 req.phase = "uncertain"
+                req.data = dict(req.data, uncertain_at=time.time())
                 state["residents"][req.actor]["blocked"] = "uncertain_request:" + req.id
 
     async def call(self, key, actor, messages, invoke, **metadata):
@@ -291,11 +311,13 @@ class WorldContext(AgentMiddleware):
 DESCRIPTIONS = {
     "board_post": "Open a public discussion thread with a title, text, and optional tags.",
     "board_read": "List/search threads (filter by query or tag; sort by hot/new/top) or read "
-    "posts in one thread_id.",
+    "posts in one thread_id, oldest first. Page with offset and next_offset; latest_offset "
+    "starts the newest replies.",
     "board_reply": "Reply to a thread_id, or attach a reaction (+1, -1, important, verified) "
     "and/or tags.",
     "send_direct_message": "Send a private message as yourself to a living resident ID.",
-    "read_conversation": "Retrieve older private conversation with another resident, if needed.",
+    "read_conversation": "Retrieve older private conversation with another resident, if needed. "
+    "Oldest first; page with offset and next_offset, latest_offset starts the newest messages.",
     "remember": "Record your fallible experience/belief/reflection. Sources are perceived evidence "
     "IDs, not request IDs. Correct a belief by superseding your own earlier belief ID.",
     "set_intention": "Record a voluntarily chosen intention or its completion.",
@@ -347,7 +369,7 @@ def make_tool(contract):
     async def perform(runtime: ToolRuntime[Context], **kwargs):
         try:
             clean = {k: v for k, v in kwargs.items() if v is not None}
-            return actions.execute(
+            return await actions.execute_async(
                 runtime.context.store,
                 runtime.context.actor,
                 dict(kind=kind, **clean),
@@ -490,6 +512,38 @@ def build_agent(model, saver, context, *, summary_trigger=100000):
     )
 
 
+def expire_uncertain(store, *, max_age=UNCERTAIN_ABANDON_SECONDS, now=None):
+    """Release residents whose unresolved request has waited longer than max_age.
+
+    Receipts from before uncertain_at was recorded start their clock at the first sweep.
+    Returns the released residents.
+    """
+    now = time.time() if now is None else now
+    released = []
+    with store.transaction() as (session, state):
+        for actor, r in state["residents"].items():
+            blocked = r["blocked"] or ""
+            if not blocked.startswith("uncertain_request:"):
+                continue
+            req = session.get(Request, blocked.removeprefix("uncertain_request:"))
+            if req is None or req.phase != "uncertain":
+                continue
+            since = req.data.get("uncertain_at")
+            if since is None:
+                req.data = dict(req.data, uncertain_at=now)
+            elif now - since >= max_age:
+                release_actor(session, state, actor)
+                emit(
+                    state,
+                    "request_abandoned",
+                    actor,
+                    request=req.id,
+                    waited_seconds=round(now - since),
+                )
+                released.append(actor)
+    return released
+
+
 class Coordinator:
     def __init__(self, store, database_url, model_factory, concurrency=2, *, tracing=False):
         self.store, self.database_url, self.model_factory = store, database_url, model_factory
@@ -591,10 +645,13 @@ class Coordinator:
                 await self._run(saver, seconds)
 
     async def _run(self, saver, seconds):
-        start = last = time.monotonic()
+        start = last = last_sweep = time.monotonic()
         try:
             while time.monotonic() - start < seconds:
                 now = time.monotonic()
+                if now - last_sweep >= UNCERTAIN_SWEEP_SECONDS:
+                    last_sweep = now
+                    expire_uncertain(self.store)
                 with self.store.transaction() as (_, state):
                     if not state["paused"]:
                         tick(state, now - last)

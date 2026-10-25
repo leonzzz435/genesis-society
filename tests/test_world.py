@@ -5,7 +5,17 @@ import pytest
 from genesis_society.actions import conversational_context, execute, recall
 from genesis_society.config import Laws
 from genesis_society.storage import uid
-from genesis_society.world import DAY, allocate, conserve, new_resident, resident_context, tick
+from genesis_society.world import (
+    DAY,
+    allocate,
+    conserve,
+    delegation_cycles,
+    new_resident,
+    represented_by,
+    resident_context,
+    tick,
+    voting_weight,
+)
 
 
 def act(store, actor, kind, **args):
@@ -266,3 +276,78 @@ def test_daily_team_dispatch_cap_and_visibility(store, actors):
         store, a, "escalate_to_team", title="Royal decree", text="Verified.", sources=[a]
     )
     assert king_send["status"] == "sent" and king_send["votes"] == 3 and d is not None
+
+
+def test_allegiance_loop_is_refused_and_existing_loops_are_listed(store, actors):
+    a, b = actors
+    act(store, b, "update_identity", name="Vassal", allegiance=a)
+    with pytest.raises(ValueError, match="already follows you"):
+        act(store, a, "update_identity", name="King", allegiance=b)
+    assert store.snapshot()["residents"][a]["allegiance"] is None
+    assert delegation_cycles(store.snapshot()) == []
+    with store.transaction() as (_, state):
+        # A loop written before the refusal existed must still be visible to the Creator.
+        state["residents"][a]["allegiance"] = b
+    cycles = delegation_cycles(store.snapshot())
+    assert len(cycles) == 1 and sorted(cycles[0]) == sorted([a, b])
+
+
+def test_long_delegation_chain_is_followed_without_a_hop_cap(store):
+    with store.transaction() as (_, state):
+        ids = [new_resident(state, age_days=3, lifespan_days=10) for _ in range(18)]
+        for leader, follower in zip(ids, ids[1:], strict=False):
+            state["residents"][follower]["allegiance"] = leader
+    state = store.snapshot()
+    assert voting_weight(state, ids[0]) == 18
+    assert ids[-1] in represented_by(state, [ids[0]])
+
+
+def _walk(read, limit):
+    seen, offset = [], 0
+    while offset is not None:
+        page = read(offset=offset, limit=limit)
+        assert len(page["items"]) <= limit
+        seen.extend(item["text"] for item in page["items"])
+        offset = page["next_offset"]
+    return seen
+
+
+def test_thread_pages_are_contiguous_bounded_and_expose_newest(store, actors):
+    a, b = actors
+    thread_id = act(store, a, "board_post", title="Ten posts", text="post 0", tags=[])["thread_id"]
+    for i in range(1, 10):
+        act(store, b if i % 2 else a, "board_reply", thread_id=thread_id, text=f"post {i}")
+
+    def read(**kwargs):
+        return act(store, a, "board_read", thread_id=thread_id, **kwargs)
+
+    everything = [f"post {i}" for i in range(10)]
+    for limit in (1, 3, 10):
+        assert _walk(read, limit) == everything, limit
+    assert read(limit=1)["items"][0]["text"] == "post 0"
+    newest = read(limit=3)
+    assert newest["latest_offset"] == 7
+    assert [i["text"] for i in read(offset=newest["latest_offset"], limit=3)["items"]] == [
+        "post 7",
+        "post 8",
+        "post 9",
+    ]
+    past_end = read(offset=10, limit=3)
+    assert past_end["items"] == [] and past_end["next_offset"] is None
+
+
+def test_direct_message_pages_are_contiguous_and_expose_newest(store, actors):
+    a, b = actors
+    for i in range(10):
+        sender, recipient = (a, b) if i % 2 == 0 else (b, a)
+        act(store, sender, "send_direct_message", recipient_id=recipient, text=f"dm {i}")
+
+    def read(**kwargs):
+        return act(store, a, "read_conversation", other_id=b, **kwargs)
+
+    everything = [f"dm {i}" for i in range(10)]
+    for limit in (1, 3, 10):
+        assert _walk(read, limit) == everything, limit
+    newest = read(limit=3)
+    assert newest["latest_offset"] == 7
+    assert [m["text"] for m in read(offset=7, limit=3)["items"]] == ["dm 7", "dm 8", "dm 9"]

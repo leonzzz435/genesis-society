@@ -3,10 +3,11 @@
 import random
 from copy import deepcopy
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import Laws
-from .storage import World, uid, utcnow
+from .storage import Request, World, uid, utcnow
 
 DAY = 86400
 COUNCIL = ("Historian", "Strategist", "Skeptic", "Scorer")
@@ -66,6 +67,19 @@ def emit(state, kind, actor=None, **data):
         if not state.get("synthetic", True) and len(seen) > 2500:
             state["residents"][actor]["seen"] = list(dict.fromkeys(seen))[-2000:]
     return event["id"]
+
+
+def release_actor(session, state, actor):
+    """Clear a resident's block and abandon its unresolved receipts.
+
+    Tickets already spent on those receipts stay spent; abandoning never refunds.
+    """
+    state["residents"][actor]["blocked"] = None
+    state["residents"][actor]["activation"] = None
+    for req in session.scalars(
+        select(Request).where(Request.actor == actor, Request.phase.in_(["sent", "uncertain"]))
+    ):
+        req.phase = "abandoned"
 
 
 def new_resident(
@@ -170,7 +184,7 @@ def format_world_time(seconds: float) -> str:
 def _transitively_follows(state, citizen_id: str, targets: set[str]) -> bool:
     cur = citizen_id
     visited: set[str] = set()
-    while cur and cur not in visited and len(visited) < 16:
+    while cur and cur not in visited:
         if cur in targets:
             return True
         visited.add(cur)
@@ -179,6 +193,32 @@ def _transitively_follows(state, citizen_id: str, targets: set[str]) -> bool:
             return False
         cur = r.get("allegiance")
     return False
+
+
+def delegation_would_cycle(state, actor_id: str, leader_id: str) -> bool:
+    """True if actor following leader would close a loop through living allegiances."""
+    return _transitively_follows(state, leader_id, {actor_id})
+
+
+def delegation_cycles(state) -> list[list[str]]:
+    """Existing allegiance loops among living residents, each as its ordered resident IDs."""
+    cycles: list[list[str]] = []
+    settled: set[str] = set()
+    for start in state["residents"]:
+        path: list[str] = []
+        position: dict[str, int] = {}
+        cur = start
+        while cur and cur not in settled and cur not in position:
+            r = state["residents"].get(cur)
+            if not r or not r["alive"]:
+                break
+            position[cur] = len(path)
+            path.append(cur)
+            cur = r.get("allegiance")
+        if cur in position:
+            cycles.append(path[position[cur] :])
+        settled.update(path)
+    return cycles
 
 
 def represented_by(state, signers):

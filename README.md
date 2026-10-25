@@ -89,8 +89,8 @@ Default test administration uses the synthetic Compose server. Override with
 | Context-triggered personal recall | Stable participant IDs; original sources retained |
 | Technical compaction | Standard middleware, ledger-backed async summarizer; mock tested |
 | Tickets, savings, gifts, recycling, lifecycle | Deterministic kernel, offline tested |
-| Concurrent activity / recovery | Two slots, per-resident isolation, durable request receipts |
-| Creator inspector | Local authenticated HTML and read-only API |
+| Concurrent activity / recovery | Four slots by default (`SOCIETY_CONCURRENCY`), per-resident isolation, durable request receipts |
+| Creator inspector | Local authenticated HTML with Creator controls; public health is liveness only |
 | Council | Four persistent identities; scripted transport intake/reply only |
 | Azure AI Foundry inference | Opt-in adapter (`SOCIETY_PROVIDER=azure_foundry`); not live-verified in CI |
 | GitHub read-only sources | Opt-in, fail-closed scope (`SOCIETY_GITHUB_ORG` + repo prefix); not live-verified in CI |

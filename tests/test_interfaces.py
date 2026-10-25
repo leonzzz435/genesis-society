@@ -2,6 +2,8 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
+from langchain_core.messages import HumanMessage
+from sqlalchemy.orm import Session
 
 from genesis_society.connectors import (
     AzureConfig,
@@ -11,6 +13,7 @@ from genesis_society.connectors import (
     receive_mock_council,
 )
 from genesis_society.inspector import app_for, worker_status
+from genesis_society.runtime import Ledger
 from genesis_society.sources import (
     SourceRead,
     _discover_github_repos,
@@ -18,7 +21,8 @@ from genesis_society.sources import (
     list_source_entrypoints,
     read_source,
 )
-from genesis_society.world import COUNCIL
+from genesis_society.storage import Request
+from genesis_society.world import COUNCIL, conserve
 
 
 def test_creator_inspector_auth_escape_and_truthful_health(store):
@@ -63,6 +67,18 @@ def test_creator_inspector_auth_escape_and_truthful_health(store):
     assert worker_status(state) == "stopped"
 
 
+def test_inspector_lists_existing_allegiance_loops(store, actors):
+    token = "synthetic-local-inspector-token-only"
+    a, b = actors
+    with store.transaction() as (_, state):
+        state["residents"][a]["allegiance"] = b
+        state["residents"][b]["allegiance"] = a
+    with TestClient(app_for(store, token)) as client:
+        response = client.get("/", headers={"Authorization": "Bearer " + token})
+    assert response.status_code == 200
+    assert "Allegiance loops (1)" in response.text
+
+
 def test_azure_contract_no_client_no_network():
     config = AzureConfig(
         endpoint="https://fixture.openai.azure.com", deployment="private-deployment"
@@ -71,11 +87,28 @@ def test_azure_contract_no_client_no_network():
     assert options["max_retries"] == 0
     assert options["base_url"].endswith("/openai/v1/")
     assert options["model"] == "private-deployment"
-    assert config.auth == "entra"
     with pytest.raises(ValueError):
         AzureConfig(endpoint="http://fixture", deployment="x")
     with pytest.raises(ValueError):
         AzureConfig(endpoint="https://fixture", deployment="x", auth="key")
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [dict(azure_auth="key"), dict(azure_api_key="fixture-key-not-a-secret")],
+)
+def test_azure_key_authentication_is_refused_before_any_model_is_built(store, overrides):
+    from genesis_society.cli import _model_factory_for
+    from genesis_society.config import Settings
+
+    settings = Settings(
+        provider="azure_foundry",
+        paid_inference_enabled=True,
+        azure_resource="fixture-resource",
+        **overrides,
+    )
+    with pytest.raises(ValueError, match="API-key authentication is not supported"):
+        _model_factory_for(store, settings)
 
 
 def test_mock_council_dedupe_mentions_and_no_reply_storm(store):
@@ -127,6 +160,19 @@ def github_scope_unset(monkeypatch):
     _scope.cache_clear()
 
 
+def test_loopback_clients_need_creator_credentials(store):
+    token = "synthetic-local-inspector-token-only"
+    with TestClient(app_for(store, token), client=("127.0.0.1", 50000)) as client:
+        assert client.get("/health").json() == {"http": "responsive"}
+        assert client.get("/").status_code == 401
+        assert client.get("/api/snapshot").status_code == 401
+        denied = client.post("/control", data={"action": "weights", "w:gpt-5.6-sol": "1.0"})
+        assert denied.status_code == 401
+        assert store.snapshot()["laws"]["birth_weights"] != {"gpt-5.6-sol": 1.0}
+        headers = {"Authorization": "Bearer " + token}
+        assert client.get("/api/snapshot", headers=headers).status_code == 200
+
+
 def test_source_allowlist_version_and_pagination(github_scope_unset):
     first = read_source(SourceRead(source_id="github:example/widget/README.md", limit=20))
     second = read_source(SourceRead(source_id=first.source_id, offset=first.next_offset, limit=20))
@@ -159,3 +205,182 @@ def test_live_github_sources_when_configured():
     assert not index.synthetic and len(index.revision) == 12 and index.text
     with pytest.raises(ValueError):
         read_source(SourceRead(source_id=f"repo:{repos[0]}:.env"))
+
+
+def test_creator_unblock_releases_resident_like_the_timer(store, actors):
+    token = "synthetic-local-inspector-token-only"
+    actor = actors[0]
+    with store.transaction() as (_, state):
+        state["paused"] = False
+    ledger = Ledger(store)
+    ledger.prepare("ui-timeout", actor, [HumanMessage(content="original")])
+    ledger.mark_sent("ui-timeout")
+    ledger.uncertain("ui-timeout", TimeoutError("timed out"))
+    spent = store.snapshot()["spent"]
+    assert store.snapshot()["residents"][actor]["blocked"] == "uncertain_request:ui-timeout"
+    with TestClient(app_for(store, token)) as client:
+        assert client.post("/login", data={"token": token}).status_code == 200
+        client.post("/control", data={"action": "unblock", "actor": actor})
+    state = store.snapshot()
+    assert state["residents"][actor]["blocked"] is None
+    assert state["spent"] == spent
+    assert conserve(state)
+    with Session(store.engine) as session:
+        assert session.get(Request, "ui-timeout").phase == "abandoned"
+
+
+def test_cost_panel_reports_unknown_when_langsmith_is_unreachable(monkeypatch):
+    import langsmith
+
+    from genesis_society import inspector
+
+    monkeypatch.setattr(inspector, "_COST_CACHE", {"at": 0.0, "world": None, "data": None})
+
+    def unreachable(*args, **kwargs):
+        raise RuntimeError("langsmith down")
+
+    monkeypatch.setattr(langsmith, "Client", unreachable)
+    state = {"laws": {"daily_tickets": 320}, "spent": 5, "epoch": 0, "synthetic": False}
+    stats = inspector._compute_cost_stats(state, [])
+    assert stats["known"] is False
+    assert stats["by_model"] == []
+    # A failed lookup is remembered, so the next poll does not query LangSmith again.
+    calls = []
+    monkeypatch.setattr(langsmith, "Client", lambda *a, **k: calls.append(1) or unreachable())
+    inspector._compute_cost_stats(state, [])
+    assert calls == []
+
+
+def test_cost_panel_is_known_for_synthetic_worlds():
+    from genesis_society import inspector
+
+    state = {"laws": {"daily_tickets": 320}, "spent": 5, "epoch": 0, "synthetic": True}
+    stats = inspector._compute_cost_stats(state, [])
+    assert stats["known"] is True
+    assert stats["total_usd"] == "0.00"
+
+
+@pytest.mark.parametrize(
+    "amounts, known, reason",
+    [
+        ([], False, "No LangSmith cost records"),
+        ([None], False, "Incomplete LangSmith costs"),
+        ([0.25, None], False, "Incomplete LangSmith costs"),
+        ([0.0], True, ""),
+        ([0.25, 0.50], True, ""),
+    ],
+)
+def test_cost_estimates_require_observed_prices(monkeypatch, amounts, known, reason):
+    from types import SimpleNamespace
+
+    import langsmith
+
+    from genesis_society import inspector
+
+    monkeypatch.setattr(inspector, "_COST_CACHE", {"at": 0.0, "world": None, "data": None})
+    runs = [SimpleNamespace(total_cost=amount, tags=["fixture-model"]) for amount in amounts]
+    monkeypatch.setattr(
+        langsmith, "Client", lambda: SimpleNamespace(list_runs=lambda **kwargs: runs)
+    )
+    state = {"laws": {"daily_tickets": 320}, "spent": 5, "epoch": 0, "synthetic": False}
+    stats = inspector._compute_cost_stats(state, [])
+    assert stats["known"] is known
+    assert reason in stats["reason"]
+    if known:
+        assert stats["total_usd"] == f"{sum(amounts):.2f}"
+        assert stats["proj_7d_usd"] == f"{sum(amounts) / 5 * 320 * 7:.2f}"
+    else:
+        assert stats["total_usd"] is None
+        assert stats["proj_7d_usd"] is None
+        assert stats["by_model"] == []
+    # Cached missing prices remain unknown; a synthetic world stays free independently.
+    assert inspector._compute_cost_stats(state, []) == stats
+    synthetic = inspector._compute_cost_stats({**state, "synthetic": True}, [])
+    assert synthetic["known"] is True and synthetic["total_usd"] == "0.00"
+
+
+def test_pulse_is_refetched_each_interval_and_keeps_its_fetch_time(monkeypatch):
+    from genesis_society import sources
+
+    sources._org_pulse_snapshot.cache_clear()
+    monkeypatch.setattr(
+        sources, "_scope", lambda: sources.GitHubScope(org="acme", name_prefix="svc-")
+    )
+    fetches = []
+    monkeypatch.setattr(
+        sources, "_org_pulse_text", lambda: fetches.append(1) or f"pulse {len(fetches)}"
+    )
+    interval = {"bucket": 1_000_001}
+    monkeypatch.setattr(sources, "_ttl_bucket", lambda: interval["bucket"])
+
+    first = read_source(SourceRead(source_id="github:PULSE"))
+    again = read_source(SourceRead(source_id="github:PULSE"))
+    assert len(fetches) == 1
+    assert again.text == first.text
+    assert again.revision == first.revision and again.captured_at == first.captured_at
+
+    interval["bucket"] += 1
+    later = read_source(SourceRead(source_id="github:PULSE"))
+    assert len(fetches) == 2 and later.text == "pulse 2"
+    sources._org_pulse_snapshot.cache_clear()
+
+
+def test_org_search_without_local_clones_is_unavailable_not_a_no_match(monkeypatch):
+    from genesis_society import sources
+
+    monkeypatch.setattr(
+        sources, "_scope", lambda: sources.GitHubScope(org="acme", name_prefix="svc-")
+    )
+    text = sources._org_search("retry")
+    assert text.startswith("Search unavailable")
+    assert "No matches" not in text
+
+
+def test_remote_repo_search_failure_is_unavailable_and_results_are_unpinned(monkeypatch):
+    from genesis_society import sources
+
+    monkeypatch.setattr(
+        sources, "_scope", lambda: sources.GitHubScope(org="acme", name_prefix="svc-")
+    )
+
+    def failing(cmd, **kwargs):
+        raise ValueError(sources.DENIED)
+
+    monkeypatch.setattr(sources, "_run", failing)
+    revision, text = sources._repo_search("repo:svc-x", "svc-x", "abc123abc123", "retry")
+    assert revision.startswith("github-index:")
+    assert text.startswith("Search unavailable")
+
+    monkeypatch.setattr(sources, "_run", lambda cmd, **kwargs: "[]")
+    revision, text = sources._repo_search("repo:svc-x", "svc-x", "abc123abc123", "retry")
+    assert revision.startswith("github-index:")
+    assert text.startswith("No matches") and "not pinned to abc123abc123" in text
+
+
+@pytest.mark.parametrize("local", [False, True])
+def test_search_page_provenance_matches_the_actual_backend(monkeypatch, tmp_path, local):
+    from types import SimpleNamespace
+
+    from genesis_society import sources
+
+    sha = "abc123abc123"
+    scope = sources.GitHubScope(org="acme", name_prefix="svc-", local_root=tmp_path)
+    monkeypatch.setattr(sources, "_scope", lambda: scope)
+    monkeypatch.setattr(sources, "_resolve_repo_head", lambda *args: sha)
+    monkeypatch.setattr(sources, "_has_local_commit", lambda *args: local)
+    monkeypatch.setattr(
+        sources, "_run", lambda *args, **kwargs: '[{"path":"retry.py","textMatches":[]}]'
+    )
+    monkeypatch.setattr(
+        sources.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=f"{sha}:retry.py:1:retry"),
+    )
+    page = read_source(SourceRead(source_id="repo:svc-x:SEARCH:retry"))
+    assert "retry.py" in page.text
+    if local:
+        assert page.revision == sha
+    else:
+        assert page.revision.startswith("github-index:")
+        assert sha not in page.revision
+        assert "not pinned" in page.text

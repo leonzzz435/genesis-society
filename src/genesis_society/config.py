@@ -75,10 +75,10 @@ class Settings(BaseSettings):
     paid_inference_enabled: bool = False
     tracing: bool = False
     concurrency: int = Field(default=4, ge=1, le=32)
+    # Entra only: the resource selects the endpoint and each resident profile names its deployment.
     azure_resource: str = ""
-    azure_endpoint: str = ""
-    azure_deployment: str = ""
     azure_auth: Literal["entra", "key"] = "entra"
+    # Set only so that a key configuration is refused before any dispatch.
     azure_api_key: SecretStr | None = None
     slack_channel_id: str = "YOUR-COUNCIL-CHANNEL"
     # Read-only GitHub scope. Empty values mean no live GitHub source is readable.

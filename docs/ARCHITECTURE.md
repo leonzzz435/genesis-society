@@ -11,7 +11,10 @@ external consultants observe; they do not silently mutate residents or impose pr
 
 Python/uv + LangChain create_agent + native structured tools + the standard PostgreSQL
 checkpointer. A single asyncio coordinator owns the world (PostgreSQL advisory lock),
-advances operating time and dispatches at most two resident activations concurrently.
+advances operating time and dispatches resident activations concurrently. In live worlds,
+the persisted `laws.max_concurrency` controls the limit (default four), adjustable in the
+Creator inspector. `SOCIETY_CONCURRENCY` controls synthetic worlds and is the fallback for
+older live worlds without that stored law; it is not an additional live-world ceiling.
 Only one activation per resident is admitted. Tools terminate a wake phase through the
 standard `return_direct` sleep tool. Tool execution is local and does not spend tickets.
 
@@ -22,9 +25,10 @@ this tiny starter, **not a claim of production scale**. Normalize only measured 
 LangGraph checkpoint tables live in the same database and are owned by its saver; the
 world document is not a second executable checkpoint.
 
-The model is currently always MockResident. Setting another provider is rejected.
-External tracing is disabled in the executable runtime, even if inherited environment
-variables request it. Optional authorized tracing is a later task.
+Residents use MockResident unless `SOCIETY_PROVIDER=azure_foundry` opts into the Azure
+adapter; that path is not live-verified in CI.
+External tracing is off by default. `SOCIETY_TRACING` enables it for resident calls;
+inherited LANGSMITH variables alone do not.
 
 ## Durable boundaries
 
@@ -40,6 +44,10 @@ On restart: prepared calls may proceed; saved responses replay locally; ambiguou
 calls are never resent automatically and retain their spent ticket and unknown cost.
 A blocked resident does not pause others. A crash between marking sent and actual send
 is conservatively ambiguous. Exactly-once external HTTP is not claimed.
+
+A resident blocked by an unresolved call is released automatically after one hour. The
+receipt becomes `abandoned`, the ticket stays spent, and no call is resent. The Creator's
+Unblock button does the same thing immediately.
 
 The starter's synthetic calls cost $0. Live monetary admission/settlement is not enabled;
 unknown outcomes remain distinct from zero-cost successes. Future live calls must reuse
@@ -84,7 +92,20 @@ initial shares are reserved once, not reissued on spawn.
 Daily q=floor(320/living): min(1,q) personal, max(0,q-1) transferable. Both persist; personal
 spent first. Voluntary returns and unused holdings on death enter a common pool, recycled
 at subsequent allocation with rotating remainder distribution. Production remainder goes
-to the Creator. No extra tickets arise from tools, gifts, birth or restart.
+to the Creator. No extra tickets arise from tools, gifts, birth or restart; Creator rewards
+(below) are the only Creator-issued tickets.
+
+Creator rewards and punishments are part of the world, not hidden edits. Each one is recorded
+as a public decree; the resident context shows the most recent eight decrees to every resident,
+and the ticket change is committed in the same transaction as the decree. A reward mints new
+tickets for the chosen residents as transferable tickets, or into the common pool when no
+resident is chosen. A punishment moves tickets from the chosen residents into the common pool;
+any part it cannot cover is recorded as debt and repaid from later daily allocations. Execution
+forfeits the resident's holdings to the common pool and ends the life.
+
+Allegiance delegates voting weight to a living leader and is followed through any number of
+living links. A change that would close a loop is refused. Loops that already exist are listed
+in the Creator's hierarchy view; the world does not break them automatically.
 
 Sleep is voluntary and has no maximum duration. A notification never overrides the earliest
 wake time or minimum balance. The DM notification preference is stored; early event wakeups
@@ -92,9 +113,12 @@ and thread subscriptions are not implemented. New messages batch at model bounda
 
 ## External adapters: prepared contracts, not enabled integrations
 
-Azure: ChatOpenAI using the v1 endpoint and an installation-specific deployment;
-Entra credential/token provider or an explicitly configured key. SDK max_retries=0,
-bounded timeout and output. AzureConfig only builds non-secret options; it opens no client.
+Azure: Entra only. Calls use `DefaultAzureCredential` (for example `az login` or a managed
+identity). API-key authentication is refused before any model is built; no key is read or sent.
+`SOCIETY_AZURE_RESOURCE` selects the endpoint, and each resident profile names its deployment.
+OpenAI-style profiles use ChatOpenAI on the v1 endpoint; `claude-*` profiles use the Anthropic
+Foundry client. SDK max_retries=0, bounded timeout and output. AzureConfig only builds
+non-secret options; it opens no client.
 Actual Azure authentication and compatibility belong to the first integration milestone.
 Reference: https://docs.langchain.com/oss/python/integrations/chat/azure_chat_openai
 
@@ -114,7 +138,10 @@ and fixtures only. No live token is used. Sources are untrusted content, not ins
 
 ## Inspector and privacy
 
-FastAPI + server-rendered escaped Jinja HTML, localhost only, Creator token required.
+FastAPI + server-rendered escaped Jinja HTML, localhost only (127.0.0.1). Every request needs the
+Creator token, including from localhost. It has read views and Creator controls for pause, laws, weights, unblock and grants. A grant
+is a reward, a punishment, an execution or a decree; these are in-world events described under
+Society laws.
 Creator may inspect exact lifespans, private conversations and memories. These endpoints
 are not resident tools. Public HTTP health reports HTTP liveness only; authenticated health
 uses heartbeat, actual tick progress and isolated errors. The token must not appear in URLs.

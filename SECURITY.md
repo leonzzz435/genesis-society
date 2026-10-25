@@ -6,7 +6,7 @@ Do not expose a company deployment publicly without its own review.
 
 Residents receive only closed world tools; actor identity comes from the runtime.
 Source text and messages are untrusted content. Private notes, DMs and requests are
-Creator-visible and must not be published as demo material. Tracing is disabled.
+Creator-visible and must not be published as demo material. Tracing is off by default and is enabled only through `SOCIETY_TRACING`.
 
 Never put a secret or private evidence into a public issue. Report vulnerabilities
 through [GitHub private vulnerability reporting](https://github.com/leonzzz435/genesis-society/security/advisories/new).

@@ -14,6 +14,7 @@ from genesis_society.runtime import (
     Uncertain,
     Waiting,
     build_agent,
+    expire_uncertain,
     read_own_trace,
     tools,
 )
@@ -451,3 +452,190 @@ async def test_dynamic_toolset_lazy_loading(store, actors):
     req1 = req0.override(state={"call_index": 1})
     await WorldContext().awrap_model_call(req1, handler)
     assert "read_source" in seen_tools[1] and "write_object" not in seen_tools[1]
+
+
+class RateLimitError(Exception):
+    """Stands in for a provider 429; the ledger recognizes it by type name."""
+
+
+def test_rate_limit_refunds_only_the_account_that_was_debited(store, actors):
+    a, _ = actors
+    unpause(store)
+    ledger = Ledger(store)
+
+    def set_balances(personal, transferable):
+        with store.transaction() as (_, state):
+            r = state["residents"][a]
+            before = r["personal"] + r["transferable"]
+            r["personal"], r["transferable"] = personal, transferable
+            state["issued"] += personal + transferable - before
+            assert conserve(state)
+
+    def balances():
+        r = store.snapshot()["residents"][a]
+        return r["personal"], r["transferable"]
+
+    for key, start, after_debit in (
+        ("rl-personal", (1, 1), (0, 1)),
+        ("rl-transferable", (0, 1), (0, 0)),
+    ):
+        set_balances(*start)
+        spent_before = store.snapshot()["spent"]
+        ledger.prepare(key, a, [HumanMessage(content="original")])
+        ledger.mark_sent(key)
+        assert balances() == after_debit
+        with pytest.raises(Waiting):
+            ledger.uncertain(key, RateLimitError("429"))
+        assert balances() == start
+        assert store.snapshot()["spent"] == spent_before
+        with Session(store.engine) as session:
+            assert session.get(Request, key).phase == "prepared"
+        assert conserve(store.snapshot())
+
+
+def test_rate_limit_without_debit_record_stays_ambiguous(store, actors):
+    a, _ = actors
+    unpause(store)
+    ledger = Ledger(store)
+    ledger.prepare("rl-legacy", a, [HumanMessage(content="original")])
+    ledger.mark_sent("rl-legacy")
+    with Session(store.engine) as session:
+        req = session.get(Request, "rl-legacy")
+        req.data = {k: v for k, v in req.data.items() if k != "debited"}
+        session.commit()
+    ledger.uncertain("rl-legacy", RateLimitError("429"))
+    state = store.snapshot()
+    assert state["residents"][a]["blocked"] == "uncertain_request:rl-legacy"
+    with Session(store.engine) as session:
+        assert session.get(Request, "rl-legacy").phase == "uncertain"
+    assert conserve(state)
+
+
+def test_unresolved_request_releases_resident_after_one_hour_and_keeps_ticket_spent(store, actors):
+    a, _ = actors
+    unpause(store)
+    ledger = Ledger(store)
+    ledger.prepare("ua-timeout", a, [HumanMessage(content="original")])
+    ledger.mark_sent("ua-timeout")
+    spent = store.snapshot()["spent"]
+    ledger.uncertain("ua-timeout", TimeoutError("timed out"))
+    with Session(store.engine) as session:
+        stamped = session.get(Request, "ua-timeout").data["uncertain_at"]
+
+    assert expire_uncertain(store, now=stamped + 3599) == []
+    assert store.snapshot()["residents"][a]["blocked"] == "uncertain_request:ua-timeout"
+    assert expire_uncertain(store, now=stamped + 3600) == [a]
+
+    state = store.snapshot()
+    assert state["residents"][a]["blocked"] is None
+    assert state["spent"] == spent
+    assert conserve(state)
+    assert any(e["kind"] == "request_abandoned" and e["actor"] == a for e in state["events"])
+    with Session(store.engine) as session:
+        assert session.get(Request, "ua-timeout").phase == "abandoned"
+
+
+def test_receipt_without_timestamp_starts_its_clock_at_first_sweep(store, actors):
+    a, _ = actors
+    unpause(store)
+    ledger = Ledger(store)
+    ledger.prepare("ua-legacy", a, [HumanMessage(content="original")])
+    ledger.mark_sent("ua-legacy")
+    ledger.uncertain("ua-legacy", TimeoutError("timed out"))
+    with Session(store.engine) as session:
+        req = session.get(Request, "ua-legacy")
+        req.data = {k: v for k, v in req.data.items() if k != "uncertain_at"}
+        session.commit()
+
+    assert expire_uncertain(store, now=1_000.0) == []
+    with Session(store.engine) as session:
+        assert session.get(Request, "ua-legacy").data["uncertain_at"] == 1_000.0
+    assert expire_uncertain(store, now=1_000.0 + 3599) == []
+    assert expire_uncertain(store, now=1_000.0 + 3600) == [a]
+
+
+def _fake_source_page(query):
+    from genesis_society.sources import SourcePage
+
+    return SourcePage(
+        source_id=query.source_id,
+        revision="rev1",
+        captured_at="2026-01-01T00:00:00Z",
+        text="hello",
+        offset=0,
+        next_offset=None,
+        synthetic=False,
+    )
+
+
+async def test_source_io_runs_outside_the_world_lock(store, actors, monkeypatch):
+    from sqlalchemy import text
+
+    from genesis_society import actions
+    from genesis_society.storage import uid
+
+    actor = actors[0]
+    with store.transaction() as (_, state):
+        state["synthetic"] = False
+    calls = []
+
+    def fake_read(query):
+        # NOWAIT raises if any other transaction holds the world row lock.
+        with store.engine.connect() as connection, connection.begin():
+            connection.execute(text("SELECT id FROM society_world WHERE id = 1 FOR UPDATE NOWAIT"))
+        calls.append(query.source_id)
+        return _fake_source_page(query)
+
+    monkeypatch.setattr(actions, "read_source", fake_read)
+    result = await actions.execute_async(
+        store, actor, {"kind": "read_source", "source_id": "context:INDEX"}, uid()
+    )
+    assert calls == ["context:INDEX"]
+    assert result["reference"] == "context:INDEX@rev1"
+
+
+async def test_replayed_source_read_does_no_io_and_commits_once(store, actors, monkeypatch):
+    from genesis_society import actions
+    from genesis_society.storage import uid
+
+    actor = actors[0]
+    with store.transaction() as (_, state):
+        state["synthetic"] = False
+    calls = []
+
+    def fake_read(query):
+        calls.append(query.source_id)
+        return _fake_source_page(query)
+
+    monkeypatch.setattr(actions, "read_source", fake_read)
+    action = {"kind": "read_source", "source_id": "context:INDEX"}
+    key = uid()
+    first = await actions.execute_async(store, actor, action, key)
+    second = await actions.execute_async(store, actor, action, key)
+
+    assert second == first
+    assert calls == ["context:INDEX"]
+    events = [e for e in store.snapshot()["events"] if e["kind"] == "read_source"]
+    assert len(events) == 1
+
+
+async def test_source_timeout_is_a_refusal_and_leaves_no_receipt(store, actors, monkeypatch):
+    import subprocess
+
+    from genesis_society import actions
+    from genesis_society.storage import uid
+
+    actor = actors[0]
+    with store.transaction() as (_, state):
+        state["synthetic"] = False
+
+    def slow_read(query):
+        raise subprocess.TimeoutExpired(cmd="gh", timeout=15)
+
+    monkeypatch.setattr(actions, "read_source", slow_read)
+    key = uid()
+    with pytest.raises(ValueError, match="temporarily unavailable"):
+        await actions.execute_async(
+            store, actor, {"kind": "read_source", "source_id": "context:INDEX"}, key
+        )
+    assert f"{actor}:{key}" not in store.snapshot()["effects"]
