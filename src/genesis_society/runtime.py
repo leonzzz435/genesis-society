@@ -28,7 +28,11 @@ from sqlalchemy.orm import Session
 from . import actions
 from .config import Settings
 from .storage import Request, uid, utcnow
-from .world import TOOLSETS, conserve, emit, tick
+from .world import TOOLSETS, conserve, emit, release_actor, tick
+
+# A resident blocked by an unresolved request is released after this long.
+UNCERTAIN_ABANDON_SECONDS = 3600
+UNCERTAIN_SWEEP_SECONDS = 5
 
 
 class Waiting(Exception):
@@ -166,7 +170,9 @@ class Ledger:
                     refunded = True
                 else:
                     req.phase = "uncertain"
-                    req.data = dict(req.data, error_type=type(error).__name__)
+                    req.data = dict(
+                        req.data, error_type=type(error).__name__, uncertain_at=time.time()
+                    )
                     r["blocked"] = "uncertain_request:" + key
         if refunded:
             raise Waiting("Provider rate limit; backing off 15s") from error
@@ -191,6 +197,7 @@ class Ledger:
                     resident["blocked"] = None
             for req in session.scalars(select(Request).where(Request.phase == "sent")):
                 req.phase = "uncertain"
+                req.data = dict(req.data, uncertain_at=time.time())
                 state["residents"][req.actor]["blocked"] = "uncertain_request:" + req.id
 
     async def call(self, key, actor, messages, invoke, **metadata):
@@ -503,6 +510,38 @@ def build_agent(model, saver, context, *, summary_trigger=100000):
     )
 
 
+def expire_uncertain(store, *, max_age=UNCERTAIN_ABANDON_SECONDS, now=None):
+    """Release residents whose unresolved request has waited longer than max_age.
+
+    Receipts from before uncertain_at was recorded start their clock at the first sweep.
+    Returns the released residents.
+    """
+    now = time.time() if now is None else now
+    released = []
+    with store.transaction() as (session, state):
+        for actor, r in state["residents"].items():
+            blocked = r["blocked"] or ""
+            if not blocked.startswith("uncertain_request:"):
+                continue
+            req = session.get(Request, blocked.removeprefix("uncertain_request:"))
+            if req is None or req.phase != "uncertain":
+                continue
+            since = req.data.get("uncertain_at")
+            if since is None:
+                req.data = dict(req.data, uncertain_at=now)
+            elif now - since >= max_age:
+                release_actor(session, state, actor)
+                emit(
+                    state,
+                    "request_abandoned",
+                    actor,
+                    request=req.id,
+                    waited_seconds=round(now - since),
+                )
+                released.append(actor)
+    return released
+
+
 class Coordinator:
     def __init__(self, store, database_url, model_factory, concurrency=2, *, tracing=False):
         self.store, self.database_url, self.model_factory = store, database_url, model_factory
@@ -604,10 +643,13 @@ class Coordinator:
                 await self._run(saver, seconds)
 
     async def _run(self, saver, seconds):
-        start = last = time.monotonic()
+        start = last = last_sweep = time.monotonic()
         try:
             while time.monotonic() - start < seconds:
                 now = time.monotonic()
+                if now - last_sweep >= UNCERTAIN_SWEEP_SECONDS:
+                    last_sweep = now
+                    expire_uncertain(self.store)
                 with self.store.transaction() as (_, state):
                     if not state["paused"]:
                         tick(state, now - last)

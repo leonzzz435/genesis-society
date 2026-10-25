@@ -41,6 +41,10 @@ calls are never resent automatically and retain their spent ticket and unknown c
 A blocked resident does not pause others. A crash between marking sent and actual send
 is conservatively ambiguous. Exactly-once external HTTP is not claimed.
 
+A resident blocked by an unresolved call is released automatically after one hour. The
+receipt becomes `abandoned`, the ticket stays spent, and no call is resent. The Creator's
+Unblock button does the same thing immediately.
+
 The starter's synthetic calls cost $0. Live monetary admission/settlement is not enabled;
 unknown outcomes remain distinct from zero-cost successes. Future live calls must reuse
 these boundaries, including summary calls, and account using exact Decimal USD values.

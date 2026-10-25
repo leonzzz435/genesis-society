@@ -2,6 +2,8 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
+from langchain_core.messages import HumanMessage
+from sqlalchemy.orm import Session
 
 from genesis_society.connectors import (
     AzureConfig,
@@ -11,6 +13,7 @@ from genesis_society.connectors import (
     receive_mock_council,
 )
 from genesis_society.inspector import app_for, worker_status
+from genesis_society.runtime import Ledger
 from genesis_society.sources import (
     SourceRead,
     _discover_github_repos,
@@ -18,7 +21,8 @@ from genesis_society.sources import (
     list_source_entrypoints,
     read_source,
 )
-from genesis_society.world import COUNCIL
+from genesis_society.storage import Request
+from genesis_society.world import COUNCIL, conserve
 
 
 def test_creator_inspector_auth_escape_and_truthful_health(store):
@@ -172,3 +176,25 @@ def test_live_github_sources_when_configured():
     assert not index.synthetic and len(index.revision) == 12 and index.text
     with pytest.raises(ValueError):
         read_source(SourceRead(source_id=f"repo:{repos[0]}:.env"))
+
+
+def test_creator_unblock_releases_resident_like_the_timer(store, actors):
+    token = "synthetic-local-inspector-token-only"
+    actor = actors[0]
+    with store.transaction() as (_, state):
+        state["paused"] = False
+    ledger = Ledger(store)
+    ledger.prepare("ui-timeout", actor, [HumanMessage(content="original")])
+    ledger.mark_sent("ui-timeout")
+    ledger.uncertain("ui-timeout", TimeoutError("timed out"))
+    spent = store.snapshot()["spent"]
+    assert store.snapshot()["residents"][actor]["blocked"] == "uncertain_request:ui-timeout"
+    with TestClient(app_for(store, token)) as client:
+        assert client.post("/login", data={"token": token}).status_code == 200
+        client.post("/control", data={"action": "unblock", "actor": actor})
+    state = store.snapshot()
+    assert state["residents"][actor]["blocked"] is None
+    assert state["spent"] == spent
+    assert conserve(state)
+    with Session(store.engine) as session:
+        assert session.get(Request, "ui-timeout").phase == "abandoned"

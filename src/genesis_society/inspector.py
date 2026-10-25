@@ -19,6 +19,7 @@ from .world import (
     emit,
     format_world_time,
     living,
+    release_actor,
     voting_weight,
 )
 
@@ -1190,20 +1191,9 @@ def apply_control(store, form: dict[str, list[str]]):
             )
             assert conserve(state)
         elif act == "unblock":
-            from sqlalchemy import select
-
-            from .storage import Request as ReqModel
-
             actor = (form.get("actor") or [""])[0]
             if actor in state["residents"]:
-                state["residents"][actor]["blocked"] = None
-                state["residents"][actor]["activation"] = None
-                for req in store_session.scalars(
-                    select(ReqModel).where(
-                        ReqModel.actor == actor, ReqModel.phase.in_(["sent", "uncertain"])
-                    )
-                ):
-                    req.phase = "abandoned"
+                release_actor(store_session, state, actor)
 
 
 def app_for(store, token):

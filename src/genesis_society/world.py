@@ -3,10 +3,11 @@
 import random
 from copy import deepcopy
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import Laws
-from .storage import World, uid, utcnow
+from .storage import Request, World, uid, utcnow
 
 DAY = 86400
 COUNCIL = ("Historian", "Strategist", "Skeptic", "Scorer")
@@ -66,6 +67,19 @@ def emit(state, kind, actor=None, **data):
         if not state.get("synthetic", True) and len(seen) > 2500:
             state["residents"][actor]["seen"] = list(dict.fromkeys(seen))[-2000:]
     return event["id"]
+
+
+def release_actor(session, state, actor):
+    """Clear a resident's block and abandon its unresolved receipts.
+
+    Tickets already spent on those receipts stay spent; abandoning never refunds.
+    """
+    state["residents"][actor]["blocked"] = None
+    state["residents"][actor]["activation"] = None
+    for req in session.scalars(
+        select(Request).where(Request.actor == actor, Request.phase.in_(["sent", "uncertain"]))
+    ):
+        req.phase = "abandoned"
 
 
 def new_resident(

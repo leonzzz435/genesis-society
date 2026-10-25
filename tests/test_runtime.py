@@ -14,6 +14,7 @@ from genesis_society.runtime import (
     Uncertain,
     Waiting,
     build_agent,
+    expire_uncertain,
     read_own_trace,
     tools,
 )
@@ -508,3 +509,46 @@ def test_rate_limit_without_debit_record_stays_ambiguous(store, actors):
     with Session(store.engine) as session:
         assert session.get(Request, "rl-legacy").phase == "uncertain"
     assert conserve(state)
+
+
+def test_unresolved_request_releases_resident_after_one_hour_and_keeps_ticket_spent(store, actors):
+    a, _ = actors
+    unpause(store)
+    ledger = Ledger(store)
+    ledger.prepare("ua-timeout", a, [HumanMessage(content="original")])
+    ledger.mark_sent("ua-timeout")
+    spent = store.snapshot()["spent"]
+    ledger.uncertain("ua-timeout", TimeoutError("timed out"))
+    with Session(store.engine) as session:
+        stamped = session.get(Request, "ua-timeout").data["uncertain_at"]
+
+    assert expire_uncertain(store, now=stamped + 3599) == []
+    assert store.snapshot()["residents"][a]["blocked"] == "uncertain_request:ua-timeout"
+    assert expire_uncertain(store, now=stamped + 3600) == [a]
+
+    state = store.snapshot()
+    assert state["residents"][a]["blocked"] is None
+    assert state["spent"] == spent
+    assert conserve(state)
+    assert any(e["kind"] == "request_abandoned" and e["actor"] == a for e in state["events"])
+    with Session(store.engine) as session:
+        assert session.get(Request, "ua-timeout").phase == "abandoned"
+
+
+def test_receipt_without_timestamp_starts_its_clock_at_first_sweep(store, actors):
+    a, _ = actors
+    unpause(store)
+    ledger = Ledger(store)
+    ledger.prepare("ua-legacy", a, [HumanMessage(content="original")])
+    ledger.mark_sent("ua-legacy")
+    ledger.uncertain("ua-legacy", TimeoutError("timed out"))
+    with Session(store.engine) as session:
+        req = session.get(Request, "ua-legacy")
+        req.data = {k: v for k, v in req.data.items() if k != "uncertain_at"}
+        session.commit()
+
+    assert expire_uncertain(store, now=1_000.0) == []
+    with Session(store.engine) as session:
+        assert session.get(Request, "ua-legacy").data["uncertain_at"] == 1_000.0
+    assert expire_uncertain(store, now=1_000.0 + 3599) == []
+    assert expire_uncertain(store, now=1_000.0 + 3600) == [a]
