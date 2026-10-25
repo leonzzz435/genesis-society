@@ -1,8 +1,8 @@
 # Development guide
 
 GENESIS Society is an offline research starter for persistent autonomous residents.
-The runnable demo uses scripted models and synthetic sources. Live integrations are
-separate implementation milestones, not enabled features.
+The runnable demo uses scripted models and synthetic sources by default. The Azure and
+GitHub adapters are opt-in and not live-verified in CI; Slack and Notion are not connected.
 
 ## Development environment
 

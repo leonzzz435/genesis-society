@@ -11,7 +11,8 @@ external consultants observe; they do not silently mutate residents or impose pr
 
 Python/uv + LangChain create_agent + native structured tools + the standard PostgreSQL
 checkpointer. A single asyncio coordinator owns the world (PostgreSQL advisory lock),
-advances operating time and dispatches at most two resident activations concurrently.
+advances operating time and dispatches at most `SOCIETY_CONCURRENCY` resident activations
+concurrently (default four).
 Only one activation per resident is admitted. Tools terminate a wake phase through the
 standard `return_direct` sleep tool. Tool execution is local and does not spend tickets.
 
@@ -22,9 +23,10 @@ this tiny starter, **not a claim of production scale**. Normalize only measured 
 LangGraph checkpoint tables live in the same database and are owned by its saver; the
 world document is not a second executable checkpoint.
 
-The model is currently always MockResident. Setting another provider is rejected.
-External tracing is disabled in the executable runtime, even if inherited environment
-variables request it. Optional authorized tracing is a later task.
+Residents use MockResident unless `SOCIETY_PROVIDER=azure_foundry` opts into the Azure
+adapter; that path is not live-verified in CI.
+External tracing is off by default. `SOCIETY_TRACING` enables it for resident calls;
+inherited LANGSMITH variables alone do not.
 
 ## Durable boundaries
 
@@ -118,7 +120,9 @@ and fixtures only. No live token is used. Sources are untrusted content, not ins
 
 ## Inspector and privacy
 
-FastAPI + server-rendered escaped Jinja HTML, localhost only, Creator token required.
+FastAPI + server-rendered escaped Jinja HTML, localhost only (127.0.0.1). Every request needs the
+Creator token, including from localhost. It has read views and Creator controls (grants,
+punishments, unblock, weights).
 Creator may inspect exact lifespans, private conversations and memories. These endpoints
 are not resident tools. Public HTTP health reports HTTP liveness only; authenticated health
 uses heartbeat, actual tick progress and isolated errors. The token must not appear in URLs.
