@@ -552,3 +552,90 @@ def test_receipt_without_timestamp_starts_its_clock_at_first_sweep(store, actors
         assert session.get(Request, "ua-legacy").data["uncertain_at"] == 1_000.0
     assert expire_uncertain(store, now=1_000.0 + 3599) == []
     assert expire_uncertain(store, now=1_000.0 + 3600) == [a]
+
+
+def _fake_source_page(query):
+    from genesis_society.sources import SourcePage
+
+    return SourcePage(
+        source_id=query.source_id,
+        revision="rev1",
+        captured_at="2026-01-01T00:00:00Z",
+        text="hello",
+        offset=0,
+        next_offset=None,
+        synthetic=False,
+    )
+
+
+async def test_source_io_runs_outside_the_world_lock(store, actors, monkeypatch):
+    from sqlalchemy import text
+
+    from genesis_society import actions
+    from genesis_society.storage import uid
+
+    actor = actors[0]
+    with store.transaction() as (_, state):
+        state["synthetic"] = False
+    calls = []
+
+    def fake_read(query):
+        # NOWAIT raises if any other transaction holds the world row lock.
+        with store.engine.connect() as connection, connection.begin():
+            connection.execute(text("SELECT id FROM society_world WHERE id = 1 FOR UPDATE NOWAIT"))
+        calls.append(query.source_id)
+        return _fake_source_page(query)
+
+    monkeypatch.setattr(actions, "read_source", fake_read)
+    result = await actions.execute_async(
+        store, actor, {"kind": "read_source", "source_id": "context:INDEX"}, uid()
+    )
+    assert calls == ["context:INDEX"]
+    assert result["reference"] == "context:INDEX@rev1"
+
+
+async def test_replayed_source_read_does_no_io_and_commits_once(store, actors, monkeypatch):
+    from genesis_society import actions
+    from genesis_society.storage import uid
+
+    actor = actors[0]
+    with store.transaction() as (_, state):
+        state["synthetic"] = False
+    calls = []
+
+    def fake_read(query):
+        calls.append(query.source_id)
+        return _fake_source_page(query)
+
+    monkeypatch.setattr(actions, "read_source", fake_read)
+    action = {"kind": "read_source", "source_id": "context:INDEX"}
+    key = uid()
+    first = await actions.execute_async(store, actor, action, key)
+    second = await actions.execute_async(store, actor, action, key)
+
+    assert second == first
+    assert calls == ["context:INDEX"]
+    events = [e for e in store.snapshot()["events"] if e["kind"] == "read_source"]
+    assert len(events) == 1
+
+
+async def test_source_timeout_is_a_refusal_and_leaves_no_receipt(store, actors, monkeypatch):
+    import subprocess
+
+    from genesis_society import actions
+    from genesis_society.storage import uid
+
+    actor = actors[0]
+    with store.transaction() as (_, state):
+        state["synthetic"] = False
+
+    def slow_read(query):
+        raise subprocess.TimeoutExpired(cmd="gh", timeout=15)
+
+    monkeypatch.setattr(actions, "read_source", slow_read)
+    key = uid()
+    with pytest.raises(ValueError, match="temporarily unavailable"):
+        await actions.execute_async(
+            store, actor, {"kind": "read_source", "source_id": "context:INDEX"}, key
+        )
+    assert f"{actor}:{key}" not in store.snapshot()["effects"]

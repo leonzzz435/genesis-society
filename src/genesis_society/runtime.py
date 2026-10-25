@@ -311,11 +311,13 @@ class WorldContext(AgentMiddleware):
 DESCRIPTIONS = {
     "board_post": "Open a public discussion thread with a title, text, and optional tags.",
     "board_read": "List/search threads (filter by query or tag; sort by hot/new/top) or read "
-    "posts in one thread_id.",
+    "posts in one thread_id, oldest first. Page with offset and next_offset; latest_offset "
+    "starts the newest replies.",
     "board_reply": "Reply to a thread_id, or attach a reaction (+1, -1, important, verified) "
     "and/or tags.",
     "send_direct_message": "Send a private message as yourself to a living resident ID.",
-    "read_conversation": "Retrieve older private conversation with another resident, if needed.",
+    "read_conversation": "Retrieve older private conversation with another resident, if needed. "
+    "Oldest first; page with offset and next_offset, latest_offset starts the newest messages.",
     "remember": "Record your fallible experience/belief/reflection. Sources are perceived evidence "
     "IDs, not request IDs. Correct a belief by superseding your own earlier belief ID.",
     "set_intention": "Record a voluntarily chosen intention or its completion.",
@@ -367,7 +369,7 @@ def make_tool(contract):
     async def perform(runtime: ToolRuntime[Context], **kwargs):
         try:
             clean = {k: v for k, v in kwargs.items() if v is not None}
-            return actions.execute(
+            return await actions.execute_async(
                 runtime.context.store,
                 runtime.context.actor,
                 dict(kind=kind, **clean),

@@ -1,7 +1,9 @@
 """Closed resident actions. Actor identity and effect keys are runtime-authoritative."""
 
+import asyncio
 import hashlib
 import json
+import subprocess
 from copy import deepcopy
 from typing import Annotated, Literal
 from uuid import UUID
@@ -244,7 +246,35 @@ def _thread_reactions(t):
     return counts, score
 
 
-def apply(state, actor, action):
+SOURCE_UNAVAILABLE = "Source is temporarily unavailable; try again later"
+
+
+def _read_query(action):
+    return SourceRead(
+        source_id=action.source_id, offset=action.offset, limit=max(1500, action.limit)
+    )
+
+
+def _source_io(action):
+    """Run the gh/git side of a source read. Callers must hold no world transaction."""
+    try:
+        if isinstance(action, ReadSource):
+            return read_source(_read_query(action))
+        return list_source_entrypoints()
+    except (subprocess.TimeoutExpired, OSError) as error:
+        raise ValueError(SOURCE_UNAVAILABLE) from error
+
+
+def _next_offset(offset, shown, total):
+    return offset + shown if offset + shown < total else None
+
+
+def _latest_offset(total, limit):
+    """Offset of the newest page, so recent replies stay one call away."""
+    return max(0, total - limit)
+
+
+def apply(state, actor, action, source_result=None):
     r = resident(state, actor)
     now = state["clock"]
     stamp = format_world_time(now)
@@ -285,10 +315,7 @@ def apply(state, actor, action):
                 if action.query:
                     q = action.query.lower()
                     rows = [p for p in rows if q in p["text"].lower()]
-                if action.offset == 0 and len(rows) > action.limit and not action.query:
-                    page = [rows[0], *rows[-(action.limit - 1) :]]
-                else:
-                    page = rows[action.offset : action.offset + action.limit]
+                page = rows[action.offset : action.offset + action.limit]
                 r["seen"].extend(item["id"] for item in page)
                 rx_counts, score = _thread_reactions(thread)
                 result = dict(
@@ -299,9 +326,8 @@ def apply(state, actor, action):
                     score=score,
                     total_posts=len(thread["posts"]),
                     items=deepcopy(page),
-                    next_offset=(
-                        action.offset + len(page) if action.offset + len(page) < len(rows) else None
-                    ),
+                    next_offset=_next_offset(action.offset, len(page), len(rows)),
+                    latest_offset=_latest_offset(len(rows), action.limit),
                 )
             else:
                 rows = list(state["threads"])
@@ -425,16 +451,12 @@ def apply(state, actor, action):
             rows = [
                 m for m in state["messages"] if {m["sender"], m["recipient"]} == {actor, other_id}
             ]
-            if action.offset == 0 and len(rows) > action.limit:
-                page = rows[-action.limit :]
-            else:
-                page = rows[action.offset : action.offset + action.limit]
+            page = rows[action.offset : action.offset + action.limit]
             r["seen"].extend(m["id"] for m in page)
             result = dict(
                 items=deepcopy(page),
-                next_offset=(
-                    action.offset + len(page) if action.offset + len(page) < len(rows) else None
-                ),
+                next_offset=_next_offset(action.offset, len(page), len(rows)),
+                latest_offset=_latest_offset(len(rows), action.limit),
             )
         case Remember():
             valid_sources = _valid_sources(state, r, actor)
@@ -601,15 +623,11 @@ def apply(state, actor, action):
             if state.get("synthetic", True):
                 result = dict(sources=list(SOURCES), synthetic=True)
             else:
-                result = dict(sources=list_source_entrypoints(), synthetic=False)
+                sources = source_result if source_result is not None else _source_io(action)
+                result = dict(sources=sources, synthetic=False)
         case ReadSource():
-            result = read_source(
-                SourceRead(
-                    source_id=action.source_id,
-                    offset=action.offset,
-                    limit=max(1500, action.limit),
-                )
-            ).model_dump()
+            page = source_result if source_result is not None else _source_io(action)
+            result = page.model_dump()
             r["seen"].append(action.source_id + "@" + result["revision"])
             result["reference"] = action.source_id + "@" + result["revision"]
         case Toolset():
@@ -705,7 +723,7 @@ def apply(state, actor, action):
     return dict(**result, event_id=event)
 
 
-def execute(store, actor, action, effect_key):
+def execute(store, actor, action, effect_key, source_result=None):
     action = ACTION.validate_python(action)
     fingerprint = hashlib.sha256(action.model_dump_json(exclude_unset=True).encode()).hexdigest()
     key = actor + ":" + effect_key
@@ -715,9 +733,30 @@ def execute(store, actor, action, effect_key):
             if prior["fingerprint"] != fingerprint:
                 raise ValueError("Effect ID reused with different arguments")
             return deepcopy(prior["result"])
-        result = apply(state, actor, action)
+        result = apply(state, actor, action, source_result=source_result)
         state["effects"][key] = dict(fingerprint=fingerprint, result=result)
         return result
+
+
+SOURCE_ACTIONS = (ReadSource, Sources)
+
+
+async def execute_async(store, actor, action, effect_key):
+    """execute() for tool calls. Source I/O runs in a worker thread, outside the world lock.
+
+    A replayed effect skips the source read entirely. The commit still happens once inside
+    execute(), which checks the effect key again under the lock.
+    """
+    parsed = ACTION.validate_python(action)
+    source_result = None
+    if isinstance(parsed, SOURCE_ACTIONS):
+        snapshot = store.snapshot()
+        if (
+            not snapshot.get("synthetic", True)
+            and actor + ":" + effect_key not in snapshot["effects"]
+        ):
+            source_result = await asyncio.to_thread(_source_io, parsed)
+    return execute(store, actor, action, effect_key, source_result=source_result)
 
 
 def recall(state, actor, pending):
