@@ -229,3 +229,59 @@ def test_cost_panel_is_known_for_synthetic_worlds():
     stats = inspector._compute_cost_stats(state, [])
     assert stats["known"] is True
     assert stats["total_usd"] == "0.00"
+
+
+def test_pulse_is_refetched_each_interval_and_keeps_its_fetch_time(monkeypatch):
+    from genesis_society import sources
+
+    sources._org_pulse_snapshot.cache_clear()
+    monkeypatch.setattr(
+        sources, "_scope", lambda: sources.GitHubScope(org="acme", name_prefix="svc-")
+    )
+    fetches = []
+    monkeypatch.setattr(
+        sources, "_org_pulse_text", lambda: fetches.append(1) or f"pulse {len(fetches)}"
+    )
+    interval = {"bucket": 1_000_001}
+    monkeypatch.setattr(sources, "_ttl_bucket", lambda: interval["bucket"])
+
+    first = read_source(SourceRead(source_id="github:PULSE"))
+    again = read_source(SourceRead(source_id="github:PULSE"))
+    assert len(fetches) == 1
+    assert again.text == first.text
+    assert again.revision == first.revision and again.captured_at == first.captured_at
+
+    interval["bucket"] += 1
+    later = read_source(SourceRead(source_id="github:PULSE"))
+    assert len(fetches) == 2 and later.text == "pulse 2"
+    sources._org_pulse_snapshot.cache_clear()
+
+
+def test_org_search_without_local_clones_is_unavailable_not_a_no_match(monkeypatch):
+    from genesis_society import sources
+
+    monkeypatch.setattr(
+        sources, "_scope", lambda: sources.GitHubScope(org="acme", name_prefix="svc-")
+    )
+    text = sources._org_search("retry")
+    assert text.startswith("Search unavailable")
+    assert "No matches" not in text
+
+
+def test_remote_repo_search_failure_is_unavailable_and_results_are_unpinned(monkeypatch):
+    from genesis_society import sources
+
+    monkeypatch.setattr(
+        sources, "_scope", lambda: sources.GitHubScope(org="acme", name_prefix="svc-")
+    )
+
+    def failing(cmd, **kwargs):
+        raise ValueError(sources.DENIED)
+
+    monkeypatch.setattr(sources, "_run", failing)
+    text = sources._repo_search("repo:svc-x", "svc-x", "abc123abc123", "retry")
+    assert text.startswith("Search unavailable")
+
+    monkeypatch.setattr(sources, "_run", lambda cmd, **kwargs: "[]")
+    text = sources._repo_search("repo:svc-x", "svc-x", "abc123abc123", "retry")
+    assert text.startswith("No matches") and "not pinned to abc123abc123" in text

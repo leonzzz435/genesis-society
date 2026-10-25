@@ -3,6 +3,7 @@
 import json
 import re
 import subprocess
+import time
 from collections import Counter
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -11,6 +12,13 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from .config import Settings
+
+# Mutable GitHub metadata (repo list, org pulse, PR details) is refetched after this interval.
+MUTABLE_TTL_SECONDS = 300
+
+
+def _ttl_bucket() -> int:
+    return int(time.time() // MUTABLE_TTL_SECONDS)
 
 
 class SourcePage(BaseModel):
@@ -125,8 +133,12 @@ def _has_local_commit(repo_dir: Path | None, sha: str) -> bool:
     return proc.returncode == 0
 
 
-@lru_cache(maxsize=1)
 def _discover_github_repos() -> tuple[str, ...]:
+    return _discover_cached(_ttl_bucket())
+
+
+@lru_cache(maxsize=4)
+def _discover_cached(bucket: int) -> tuple[str, ...]:
     scope = _scope()
     if not scope.repos_enabled:
         return ()
@@ -328,8 +340,9 @@ def _repo_prs(repo_name: str) -> str:
     return "\n".join(lines)
 
 
+# The bucket only keys the cache, so PR state (open or merged) is refetched each interval.
 @lru_cache(maxsize=256)
-def _repo_pr_detail(repo_name: str, number: int) -> tuple[str, str]:
+def _repo_pr_detail(repo_name: str, number: int, bucket: int) -> tuple[str, str]:
     raw = _run(
         [
             "gh",
@@ -406,26 +419,38 @@ def _repo_search(prefix: str, repo_name: str, revision: str, term: str) -> str:
             f"(showing {len(hits)} of {len(all_lines)} matches)"
         )
         return "\n".join([header, *hits])
-    raw = _run(
-        [
-            "gh",
-            "search",
-            "code",
-            term,
-            "--repo",
-            f"{_scope().org}/{repo_name}",
-            "--limit",
-            "25",
-            "--json",
-            "path,textMatches",
-        ]
-    )
+    # GitHub code search covers only the default branch, so its result is not pinned to revision.
+    try:
+        raw = _run(
+            [
+                "gh",
+                "search",
+                "code",
+                term,
+                "--repo",
+                f"{_scope().org}/{repo_name}",
+                "--limit",
+                "25",
+                "--json",
+                "path,textMatches",
+            ]
+        )
+    except (ValueError, subprocess.TimeoutExpired):
+        return (
+            f"Search unavailable for '{term}' in {repo_name}: GitHub code search failed. "
+            "Nothing was searched."
+        )
     items = json.loads(raw)
     hits = []
     for item in items[:25]:
         frag = ((item.get("textMatches") or [{}])[0].get("fragment") or "").replace("\n", " ")[:120]
         hits.append(f"{prefix}:{item['path']} :: {frag}")
-    return "\n".join(hits) or f"No matches for '{term}' in {repo_name}"
+    scope_note = (
+        f"GitHub code search on the default branch of {repo_name}; not pinned to {revision}"
+    )
+    if not hits:
+        return f"No matches for '{term}' ({scope_note})"
+    return "\n".join([f"# Search '{term}' ({scope_note})", *hits])
 
 
 def _repo_commit(repo_name: str, sha: str) -> tuple[str, str]:
@@ -451,6 +476,8 @@ def _org_search(term: str) -> str:
         raise ValueError("Search term must be at least 2 characters")
     scope = _scope()
     hits: list[str] = []
+    searched = 0
+    failed = 0
     if scope.local_root and scope.local_root.is_dir():
         for repo_dir in sorted(scope.local_root.iterdir()):
             if not (repo_dir.is_dir() and (repo_dir / ".git").exists()):
@@ -458,39 +485,58 @@ def _org_search(term: str) -> str:
             is_context = scope.context_enabled and repo_dir.name == scope.context_repo
             if not (is_context or scope.is_canonical(repo_dir.name)):
                 continue
-            proc = subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    str(repo_dir),
-                    "grep",
-                    "-n",
-                    "-I",
-                    "-i",
-                    "-F",
-                    "-m",
-                    "3",
-                    term,
-                    "HEAD",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=4,
-            )
+            try:
+                proc = subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(repo_dir),
+                        "grep",
+                        "-n",
+                        "-I",
+                        "-i",
+                        "-F",
+                        "-m",
+                        "3",
+                        term,
+                        "HEAD",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=4,
+                )
+            except subprocess.TimeoutExpired:
+                failed += 1
+                continue
+            # git grep exits 0 for hits, 1 for no hits, and above 1 for errors.
+            if proc.returncode > 1:
+                failed += 1
+                continue
+            searched += 1
             prefix = "context" if is_context else f"repo:{repo_dir.name}"
             for line in proc.stdout.splitlines()[:3]:
                 hits.append(f"{prefix}:{line.removeprefix('HEAD:')[:130]}")
             if len(hits) >= 35:
                 break
+    if not searched:
+        return (
+            f"Search unavailable for '{term}' in {scope.name_prefix}* repos: no local clone "
+            "could be searched. Nothing was searched, so this is not a no-match result."
+        )
+    coverage = f"{searched} local clone(s) searched"
+    if failed:
+        coverage += f", {failed} skipped after timeout or error"
     if not hits:
-        return f"No matches for '{term}' across {scope.name_prefix}* repos"
-    header = f"# Org search '{term}' (showing {min(30, len(hits))} matches; capped at 3 per repo)"
+        return f"No matches for '{term}' in local clones ({coverage}). Remote repos not searched."
+    header = (
+        f"# Org search '{term}' ({coverage}; showing {min(30, len(hits))} matches, "
+        "capped at 3 per repo)"
+    )
     return "\n".join([header, *hits[:30]])
 
 
-@lru_cache(maxsize=4)
-def _org_pulse() -> str:
+def _org_pulse_text() -> str:
     scope = _scope()
     repos_raw = _run(
         [
@@ -565,6 +611,17 @@ def _org_pulse() -> str:
     )
 
 
+@lru_cache(maxsize=4)
+def _org_pulse_snapshot(bucket: int) -> tuple[str, str]:
+    # The bucket only keys the cache: one fetch serves one interval, then content is refetched.
+    captured_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return captured_at, _org_pulse_text()
+
+
+def _org_pulse() -> tuple[str, str]:
+    return _org_pulse_snapshot(_ttl_bucket())
+
+
 def list_source_entrypoints() -> list[str]:
     scope = _scope()
     entries: list[str] = []
@@ -585,7 +642,7 @@ def _dispatch_repo(prefix: str, repo_name: str, rel_path: str) -> tuple[str, str
         num = rel_path.removeprefix("PR:").strip()
         if not num.isdigit():
             raise ValueError("PR number must be numeric")
-        return _repo_pr_detail(repo_name, int(num))
+        return _repo_pr_detail(repo_name, int(num), _ttl_bucket())
     if rel_path.startswith("COMMIT:"):
         return _repo_commit(repo_name, rel_path.removeprefix("COMMIT:").strip())
     revision = _resolve_repo_head(repo_name, _local_dir(repo_name))
@@ -606,11 +663,6 @@ def _dispatch_repo(prefix: str, repo_name: str, rel_path: str) -> tuple[str, str
 
 def _read_git_source(source_id: str) -> tuple[str, str]:
     scope = _scope()
-    if source_id == "github:PULSE":
-        if not scope.repos_enabled:
-            raise ValueError(DENIED)
-        return datetime.now(UTC).strftime("%Y%m%d"), _org_pulse()
-
     if source_id.startswith("github:SEARCH:"):
         if not scope.repos_enabled:
             raise ValueError(DENIED)
@@ -641,27 +693,31 @@ def _read_git_source(source_id: str) -> tuple[str, str]:
     raise ValueError(DENIED)
 
 
-def read_source(query: SourceRead) -> SourcePage:
-    if query.source_id in SOURCES:
-        revision, content = SOURCES[query.source_id]
-        end = min(len(content), query.offset + query.limit)
-        return SourcePage(
-            source_id=query.source_id,
-            revision=revision,
-            captured_at="2026-01-01T00:00:00Z",
-            text=content[query.offset : end],
-            offset=query.offset,
-            next_offset=end if end < len(content) else None,
-            synthetic=True,
-        )
-    revision, content = _read_git_source(query.source_id)
+def _page(
+    query: SourceRead, revision: str, content: str, captured_at: str, *, synthetic: bool
+) -> SourcePage:
     end = min(len(content), query.offset + query.limit)
     return SourcePage(
         source_id=query.source_id,
         revision=revision,
-        captured_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        captured_at=captured_at,
         text=content[query.offset : end],
         offset=query.offset,
         next_offset=end if end < len(content) else None,
-        synthetic=False,
+        synthetic=synthetic,
     )
+
+
+def read_source(query: SourceRead) -> SourcePage:
+    if query.source_id in SOURCES:
+        revision, content = SOURCES[query.source_id]
+        return _page(query, revision, content, "2026-01-01T00:00:00Z", synthetic=True)
+    if query.source_id == "github:PULSE":
+        if not _scope().repos_enabled:
+            raise ValueError(DENIED)
+        captured_at, content = _org_pulse()
+        revision = captured_at.replace("-", "").replace(":", "")
+        return _page(query, revision, content, captured_at, synthetic=False)
+    revision, content = _read_git_source(query.source_id)
+    captured_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return _page(query, revision, content, captured_at, synthetic=False)
