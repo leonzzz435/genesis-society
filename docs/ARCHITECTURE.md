@@ -98,9 +98,12 @@ and thread subscriptions are not implemented. New messages batch at model bounda
 
 ## External adapters: prepared contracts, not enabled integrations
 
-Azure: ChatOpenAI using the v1 endpoint and an installation-specific deployment;
-Entra credential/token provider or an explicitly configured key. SDK max_retries=0,
-bounded timeout and output. AzureConfig only builds non-secret options; it opens no client.
+Azure: Entra only. Calls use `DefaultAzureCredential` (for example `az login` or a managed
+identity). API-key authentication is refused before any model is built; no key is read or sent.
+`SOCIETY_AZURE_RESOURCE` selects the endpoint, and each resident profile names its deployment.
+OpenAI-style profiles use ChatOpenAI on the v1 endpoint; `claude-*` profiles use the Anthropic
+Foundry client. SDK max_retries=0, bounded timeout and output. AzureConfig only builds
+non-secret options; it opens no client.
 Actual Azure authentication and compatibility belong to the first integration milestone.
 Reference: https://docs.langchain.com/oss/python/integrations/chat/azure_chat_openai
 

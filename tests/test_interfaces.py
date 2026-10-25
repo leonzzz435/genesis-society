@@ -75,11 +75,28 @@ def test_azure_contract_no_client_no_network():
     assert options["max_retries"] == 0
     assert options["base_url"].endswith("/openai/v1/")
     assert options["model"] == "private-deployment"
-    assert config.auth == "entra"
     with pytest.raises(ValueError):
         AzureConfig(endpoint="http://fixture", deployment="x")
     with pytest.raises(ValueError):
         AzureConfig(endpoint="https://fixture", deployment="x", auth="key")
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [dict(azure_auth="key"), dict(azure_api_key="fixture-key-not-a-secret")],
+)
+def test_azure_key_authentication_is_refused_before_any_model_is_built(store, overrides):
+    from genesis_society.cli import _model_factory_for
+    from genesis_society.config import Settings
+
+    settings = Settings(
+        provider="azure_foundry",
+        paid_inference_enabled=True,
+        azure_resource="fixture-resource",
+        **overrides,
+    )
+    with pytest.raises(ValueError, match="API-key authentication is not supported"):
+        _model_factory_for(store, settings)
 
 
 def test_mock_council_dedupe_mentions_and_no_reply_storm(store):

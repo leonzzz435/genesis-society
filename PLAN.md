@@ -21,8 +21,8 @@ See docs/VERIFICATION.md for executed checks, not just checklist intent.
 Starting point: mock-only executable runtime; AzureConfig supplies validated endpoint,
 deployment and zero-retry client options. No credentials are committed.
 
-Implement the actual langchain-openai Azure v1 client using Entra token acquisition or
-an installation-specific API key. Keep mock as default; paid use requires explicit
+Implement the actual langchain-openai Azure v1 client using Entra token acquisition only;
+API-key authentication is refused, not supported. Keep mock as default; paid use requires explicit
 runtime opt-in and a configured installation financial authority. Add exact Decimal
 usage/cost recording and bounded request admission; unknown billing remains unknown.
 Never overwrite a resident's pinned profile silently. No cross-model fallback.

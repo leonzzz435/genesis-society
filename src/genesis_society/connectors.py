@@ -9,11 +9,11 @@ from .world import COUNCIL
 
 
 class AzureConfig(BaseModel):
+    """Non-secret client options. Entra is the only supported authentication."""
+
     model_config = ConfigDict(extra="forbid")
     endpoint: str
     deployment: str
-    auth: Literal["entra", "key"] = "entra"
-    api_key: SecretStr | None = None
 
     @model_validator(mode="after")
     def validate_endpoint(self):
@@ -24,8 +24,6 @@ class AzureConfig(BaseModel):
             raise ValueError("Use the resource root or /openai/v1 endpoint")
         if not self.deployment.strip():
             raise ValueError("An installation-specific deployment name is required")
-        if self.auth == "key" and self.api_key is None:
-            raise ValueError("API key is required for key authentication")
         return self
 
     def client_options(self):

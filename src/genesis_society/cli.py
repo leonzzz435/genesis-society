@@ -22,6 +22,14 @@ def _model_factory_for(store: Store, settings: Settings):
         )
     if not settings.azure_resource.strip():
         raise ValueError("Live Azure Foundry inference requires SOCIETY_AZURE_RESOURCE")
+    key_configured = settings.azure_api_key is not None and bool(
+        settings.azure_api_key.get_secret_value()
+    )
+    if settings.azure_auth != "entra" or key_configured:
+        raise ValueError(
+            "Azure API-key authentication is not supported; use Entra only "
+            "(SOCIETY_AZURE_AUTH=entra and no SOCIETY_AZURE_API_KEY)"
+        )
     from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 
     tp = get_bearer_token_provider(
